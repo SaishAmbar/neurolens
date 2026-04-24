@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="NeuroSense AI — Real-time multimodal behavioral perception with emotion detection, focus analysis, and sign language recognition.">
+  <title>NeuroSense AI — Behavioral Perception</title>
+  <link rel="stylesheet" href="index.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="bg-gradient"></div>
+
+  <!-- ===== HEADER ===== -->
+  <header class="header">
+    <div class="logo">
+      <div class="logo-icon">🧠</div>
+      <div class="logo-text"><span>NeuroSense</span> AI</div>
+    </div>
+    <div class="header-status">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Initializing…</span>
+    </div>
+  </header>
+
+  <!-- ===== MAIN ===== -->
+  <main class="main">
+
+    <!-- Video Section -->
+    <section class="video-section">
+      <div class="video-container" id="videoContainer">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="overlayCanvas"></canvas>
+        <div class="scan-line" id="scanLine"></div>
+
+        <div class="video-overlay-info">
+          <span id="resolution">--</span>
+          <span class="fps-counter" id="fpsCounter">-- FPS</span>
+        </div>
+
+        <!-- Loading overlay -->
+        <div class="loading-overlay" id="loadingOverlay">
+          <div class="loading-spinner"></div>
+          <div class="loading-text" id="loadingText">
+            Loading <span>MediaPipe</span> models…
+          </div>
+        </div>
+
+        <!-- Permission screen (shown before camera access) -->
+        <div class="loading-overlay" id="permissionScreen">
+          <div class="permission-screen">
+            <div class="perm-icon">📷</div>
+            <h2>Camera Access Required</h2>
+            <p>NeuroSense AI needs webcam access for real-time behavioral analysis. All processing happens locally in your browser.</p>
+            <button class="btn-primary" id="startBtn">Enable Camera</button>
+            <div class="error-msg" id="errorMsg" style="display:none"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- JSON Output -->
+      <div class="json-section">
+        <button class="json-toggle" id="jsonToggle">
+          <span class="arrow">▶</span>
+          <span>Live JSON Output</span>
+        </button>
+        <div class="json-output" id="jsonOutput">
+          <pre class="json-pre" id="jsonPre">{ "status": "waiting for camera..." }</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Analysis Panels -->
+    <aside class="panels-column">
+
+      <!-- Mode Selector Tabs -->
+      <div class="mode-tabs mode-tabs-4" id="modeTabs">
+        <button class="mode-tab active" data-mode="emotion" id="tabEmotion">
+          <span class="tab-icon">😊</span>
+          <span class="tab-label">Emotion</span>
+        </button>
+        <button class="mode-tab" data-mode="focus" id="tabFocus">
+          <span class="tab-icon">🎯</span>
+          <span class="tab-label">Focus</span>
+        </button>
+        <button class="mode-tab" data-mode="sign" id="tabSign">
+          <span class="tab-icon">🤟</span>
+          <span class="tab-label">Sign Lang</span>
+        </button>
+        <button class="mode-tab" data-mode="neurolens" id="tabNeuroLens">
+          <span class="tab-icon">🔭</span>
+          <span class="tab-label">Obstacles</span>
+        </button>
+      </div>
+
+      <!-- Emotion Panel -->
+      <div class="panel emotion mode-panel" id="emotionPanel" data-mode="emotion">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">😊</span> Emotion Detection</div>
+          <span class="panel-badge inactive" id="emotionBadge">IDLE</span>
+        </div>
+        <div class="primary-value" id="emotionPrimary" style="color: var(--accent-orange)">—</div>
+        <div class="secondary-value">
+          Secondary: <strong id="emotionSecondary">—</strong>
+          &nbsp;·&nbsp;
+          <span class="intensity-badge low" id="emotionIntensity">—</span>
+        </div>
+        <div class="confidence-row">
+          <span class="confidence-label">Confidence</span>
+          <div class="confidence-bar"><div class="confidence-fill orange" id="emotionConfBar"></div></div>
+          <span class="confidence-value" id="emotionConfVal">0%</span>
+        </div>
+        <div class="evidence" id="emotionEvidence">Waiting for face detection…</div>
+      </div>
+
+      <!-- Focus Panel -->
+      <div class="panel focus mode-panel" id="focusPanel" data-mode="focus" style="display:none;">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">🎯</span> Focus / Attention</div>
+          <span class="panel-badge inactive" id="focusBadge">IDLE</span>
+        </div>
+        <div class="primary-value" id="focusState" style="color: var(--accent-cyan)">—</div>
+        <div class="confidence-row">
+          <span class="confidence-label">Confidence</span>
+          <div class="confidence-bar"><div class="confidence-fill cyan" id="focusConfBar"></div></div>
+          <span class="confidence-value" id="focusConfVal">0%</span>
+        </div>
+        <div class="evidence" id="focusEvidence">Waiting for face detection…</div>
+      </div>
+
+      <!-- Sign Language Panel -->
+      <div class="panel sign-lang mode-panel" id="signPanel" data-mode="sign" style="display:none;">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">🤟</span> Sign Language → Sentence</div>
+          <div class="sign-header-controls">
+            <label class="sign-toggle" id="signToggle" title="Toggle sign detection on/off">
+              <input type="checkbox" id="signToggleInput" checked>
+              <span class="sign-toggle-slider"></span>
+              <span class="sign-toggle-label" id="signToggleLabel">ON</span>
+            </label>
+            <span class="sign-status-badge" id="signStatusBadge">Detecting...</span>
+            <span class="panel-badge inactive" id="signBadge">IDLE</span>
+          </div>
+        </div>
+
+        <div class="sign-current-row">
+          <div class="gesture-display" id="gestureDisplay">—</div>
+          <div class="sign-current-info">
+            <div class="sign-current-label">Live Detection</div>
+            <div class="primary-value" id="signInterpretation" style="color: var(--accent-green); font-size: 1.15rem;">No hands detected</div>
+          </div>
+        </div>
+
+        <div class="sign-forming-row" id="signFormingRow" style="display: none;">
+          <span class="sign-forming-label">Buffer:</span>
+          <span class="sign-forming-text" id="signFormingText"></span>
+          <span class="sign-forming-cursor">●</span>
+        </div>
+
+        <div class="confidence-row">
+          <span class="confidence-label">Sign</span>
+          <div class="confidence-bar"><div class="confidence-fill green" id="signConfBar"></div></div>
+          <span class="confidence-value" id="signConfVal">—</span>
+        </div>
+        <div class="confidence-row">
+          <span class="confidence-label">Word</span>
+          <div class="confidence-bar"><div class="confidence-fill cyan" id="wordConfBar"></div></div>
+          <span class="confidence-value" id="wordConfVal">—</span>
+        </div>
+        <div class="confidence-row">
+          <span class="confidence-label">Sentence</span>
+          <div class="confidence-bar"><div class="confidence-fill purple" id="sentenceConfBar"></div></div>
+          <span class="confidence-value" id="sentenceConfVal">—</span>
+        </div>
+
+        <div class="alternatives" id="signAlternatives"></div>
+
+        <div class="sign-transcript-section">
+          <div class="sign-transcript-header">
+            <span class="sign-transcript-title">📝 Sentence Transcript</span>
+            <div class="sign-btn-group">
+              <button class="sign-undo-btn" id="signUndoBtn" title="Undo last word">← Undo</button>
+              <button class="sign-reset-btn" id="signResetBtn" title="Reset transcript">↻ Reset</button>
+            </div>
+          </div>
+          <div class="sign-current-sentence" id="signCurrentSentence">
+            <span class="sign-sentence-placeholder">Start signing to build a sentence...</span>
+          </div>
+          <div class="sign-transcript-history" id="signTranscriptHistory"></div>
+        </div>
+      </div>
+
+      <!-- NeuroLens Obstacle Detection Panel -->
+      <div class="panel neurolens mode-panel" id="obstaclePanel" data-mode="neurolens" style="display:none;">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">🔭</span> NeuroLens</div>
+          <span class="panel-badge inactive" id="obstacleBadge">IDLE</span>
+        </div>
+
+        <!-- Alert Zone -->
+        <div class="nl-alert-zone" id="nlAlertZone">
+          <div class="nl-alert-icon" id="nlAlertIcon">✓</div>
+          <div class="nl-alert-text">
+            <div class="nl-alert-label" id="nlAlertLabel">PATH CLEAR</div>
+            <div class="nl-alert-sub" id="nlAlertSub">No obstacles detected</div>
+          </div>
+        </div>
+
+        <!-- Closest Object Card -->
+        <div class="nl-threat-card" id="nlThreatCard" style="display:none;">
+          <div class="nl-threat-header">CLOSEST OBJECT</div>
+          <div class="nl-threat-info">
+            <div class="nl-threat-name" id="nlThreatName">—</div>
+            <div class="nl-threat-stats">
+              <span class="nl-stat"><span class="nl-stat-label">DIST</span> <span id="nlThreatDist">—</span></span>
+              <span class="nl-stat"><span class="nl-stat-label">DIR</span> <span id="nlThreatDir">—</span></span>
+              <span class="nl-stat"><span class="nl-stat-label">DANGER</span> <span id="nlThreatDanger">—</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Detection Count -->
+        <div class="nl-detection-count">
+          <span class="nl-count-label">OBJECTS DETECTED</span>
+          <span class="nl-count-value" id="nlDetectionCount">0</span>
+        </div>
+
+        <!-- Detection List -->
+        <div class="nl-detections-list" id="nlDetectionsList"></div>
+
+        <div class="evidence" id="obstacleEvidence">Model: COCO-SSD (MobileNet v2) · TensorFlow.js · Browser GPU</div>
+      </div>
+
+      <!-- Visual Quality Panel (always visible) -->
+      <div class="panel quality" id="qualityPanel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">📊</span> Visual Quality</div>
+          <span class="panel-badge inactive" id="qualityBadge">IDLE</span>
+        </div>
+        <div class="quality-grid">
+          <div class="quality-item">
+            <div class="q-label">Lighting</div>
+            <div class="q-value good" id="qLighting">—</div>
+          </div>
+          <div class="quality-item">
+            <div class="q-label">Occlusion</div>
+            <div class="q-value none" id="qOcclusion">—</div>
+          </div>
+          <div class="quality-item">
+            <div class="q-label">Clarity</div>
+            <div class="q-value good" id="qClarity">—</div>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
