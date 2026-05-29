@@ -1,2 +1,11 @@
 opencv-python>=4.8.0
 numpy>=1.24.0
+
+# ─── Pi-side dependencies (install on Raspberry Pi only) ─────────────────────
+# These come pre-installed on Raspberry Pi OS Bookworm:
+#   picamera2        — Python camera interface for libcamera
+#   libcamera        — Low-level camera stack (provides AF/HDR controls)
+#
+# Install manually if missing:
+#   sudo apt install -y python3-picamera2 python3-libcamera
+#   pip install flask flask-cors opencv-python-headless

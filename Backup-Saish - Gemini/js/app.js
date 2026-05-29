@@ -4,11 +4,12 @@
  */
 
 import { FaceLandmarker, HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
-import { EmotionAnalyzer } from './emotion-analyzer.js';
+import { EmotionAnalyzer } from './emotion-analyzer.js?v=2';
 import { FocusAnalyzer } from './focus-analyzer.js';
 import { SignLanguageAnalyzer } from './sign-language-analyzer.js';
 import { VisualQualityAnalyzer } from './visual-quality.js';
 import { NeuroLensAnalyzer } from './neurolens-analyzer.js';
+import { TextScanner } from './text-scanner.js';
 
 // ── DOM Elements ──
 const $ = id => document.getElementById(id);
@@ -86,7 +87,52 @@ const DOM = {
   jsonPre: $('jsonPre'),
   // Mode tabs
   modeTabs: $('modeTabs'),
+  // Text Scanner
+  textScannerPanel: $('textScannerPanel'),
+  textScannerBadge: $('textScannerBadge'),
+  tsFrozenCanvas: $('tsFrozenCanvas'),
+  tsFramePlaceholder: $('tsFramePlaceholder'),
+  tsScanBtn: $('tsScanBtn'),
+  tsClearBtn: $('tsClearBtn'),
+  tsProgressRow: $('tsProgressRow'),
+  tsProgressBar: $('tsProgressBar'),
+  tsProgressVal: $('tsProgressVal'),
+  tsRawText: $('tsRawText'),
+  tsCharCount: $('tsCharCount'),
+  tsSummaryBox: $('tsSummaryBox'),
+  tsModelLabel: $('tsModelLabel'),
+  tsError: $('tsError'),
+  tsEvidence: $('tsEvidence'),
 };
+
+// ── Pi Camera Config ──
+const PI_STREAM_URL = 'http://10.221.228.112:5001/stream';
+
+// ── OLED Display Config ──
+const PI_OLED_URL = 'http://10.221.228.112:5002/oled';
+let _oledLastSent = 0;
+
+/**
+ * Sends display data to the SSD1306 OLED via the Pi Flask server.
+ * Throttled to once per 500ms. Silently ignores errors (Pi may be offline).
+ * @param {string} mode  - 'emotion'|'focus'|'sign'|'obstacle'|'textscanner'
+ * @param {object|null} data - { line1, line2, scroll } or null to clear screen
+ */
+function sendToOLED(mode, data) {
+  const now = Date.now();
+  if (now - _oledLastSent < 500) return;
+  _oledLastSent = now;
+
+  const body = data
+    ? { mode, line1: data.line1 ?? '', line2: data.line2 ?? '', scroll: !!data.scroll }
+    : { mode, line1: '', line2: '', scroll: false };
+
+  fetch(PI_OLED_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).catch(() => { /* Pi offline — silently ignore */ });
+}
 
 // ── State ──
 let faceLandmarker = null;
@@ -99,16 +145,24 @@ let currentFps = 0;
 let currentMode = 'emotion';
 let neurolensLoading = false;
 let signDetectionEnabled = true;
+let usePiCamera = false;      // false = laptop webcam, true = Pi Camera Module 3
+let piImgEl = null;           // <img> fed by MJPEG stream
+let piFrameCanvas = null;     // offscreen canvas bridging MJPEG → video
+let piFrameCtx = null;
+let piFrameLoopId = null;
 
 const emotionAnalyzer = new EmotionAnalyzer();
 const focusAnalyzer = new FocusAnalyzer();
 const signAnalyzer = new SignLanguageAnalyzer();
 const qualityAnalyzer = new VisualQualityAnalyzer();
 const neurolensAnalyzer = new NeuroLensAnalyzer();
+const textScanner = new TextScanner();
+let textScannerLoading = false;
 
 // Canvas for pixel analysis (offscreen)
 const analysisCanvas = document.createElement('canvas');
 const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
+
 
 // ── Mode Switching ──
 function switchMode(mode) {
@@ -122,21 +176,24 @@ function switchMode(mode) {
       panel.style.animation = 'none';
       panel.offsetHeight;
       panel.style.animation = '';
+      // Focus Highlight Mode: mark active panel
+      panel.classList.add('focus-active');
     } else {
       panel.style.display = 'none';
+      panel.classList.remove('focus-active');
     }
   });
-  const modeNames = { emotion: 'Emotion Detection', focus: 'Focus Analysis', sign: 'Sign Language', neurolens: 'NeuroLens Detection' };
+  const modeNames = { emotion: 'Analyzing emotions…', focus: 'Tracking attention…', sign: 'Reading signs…', neurolens: 'Scanning surroundings…', textscanner: 'Text scanner ready…' };
   if (DOM.statusDot.classList.contains('active')) {
-    DOM.statusText.textContent = modeNames[mode] || 'Live Analysis';
+    DOM.statusText.textContent = modeNames[mode] || 'Observing…';
   }
   // Lazy-load NeuroLens model when tab is first selected
   if (mode === 'neurolens' && !neurolensAnalyzer.isLoaded && !neurolensLoading) {
     neurolensLoading = true;
-    DOM.nlAlertSub.textContent = 'Loading COCO-SSD model...';
+    DOM.nlAlertSub.textContent = 'Warming up obstacle model…';
     neurolensAnalyzer.loadModel().then(() => {
       neurolensLoading = false;
-      DOM.nlAlertSub.textContent = 'Model ready — scanning...';
+      DOM.nlAlertSub.textContent = 'Model ready — scanning…';
       if (DOM.obstacleBadge) {
         DOM.obstacleBadge.className = 'panel-badge active';
         DOM.obstacleBadge.textContent = 'LIVE';
@@ -144,6 +201,20 @@ function switchMode(mode) {
     }).catch(err => {
       neurolensLoading = false;
       DOM.nlAlertSub.textContent = `Model load failed: ${err.message}`;
+    });
+  }
+  // Lazy-load Tesseract worker when Text Scanner tab is first selected
+  if (mode === 'textscanner' && !textScanner.isReady && !textScannerLoading) {
+    textScannerLoading = true;
+    setTSBadge('scanning', '⚙️ LOADING');
+    textScanner.initWorker().then(() => {
+      textScannerLoading = false;
+      setTSBadge('active', 'READY');
+    }).catch(err => {
+      textScannerLoading = false;
+      setTSBadge('error', 'ERROR');
+      DOM.tsError.textContent = `Tesseract load failed: ${err.message}`;
+      DOM.tsError.style.display = '';
     });
   }
 }
@@ -179,10 +250,262 @@ DOM.signToggleInput.addEventListener('change', (e) => {
   DOM.signToggleLabel.textContent = signDetectionEnabled ? 'ON' : 'OFF';
 });
 
+// ── Text Scanner Buttons ──
+let tsProgressPoll = null;
+
+function setTSBadge(cls, text) {
+  DOM.textScannerBadge.className = `panel-badge ${cls}`;
+  DOM.textScannerBadge.textContent = text;
+}
+
+function resetTextScannerUI() {
+  textScanner.reset();
+  DOM.tsFrozenCanvas.classList.remove('visible');
+  DOM.tsFramePlaceholder.classList.remove('hidden');
+  DOM.tsRawText.innerHTML = '<span class="ts-placeholder-text">No text extracted yet…</span>';
+  DOM.tsRawText.classList.remove('has-content');
+  DOM.tsSummaryBox.innerHTML = '<span class="ts-placeholder-text">Summary will appear here…</span>';
+  DOM.tsSummaryBox.classList.remove('has-content', 'streaming');
+  DOM.tsCharCount.textContent = '';
+  DOM.tsProgressRow.style.display = 'none';
+  DOM.tsProgressBar.style.width = '0%';
+  DOM.tsProgressVal.textContent = '0%';
+  DOM.tsError.style.display = 'none';
+  DOM.tsScanBtn.disabled = false;
+  DOM.tsScanBtn.textContent = '🔍 Scan';
+  DOM.tsScanBtn.classList.remove('scanning');
+  DOM.tsClearBtn.disabled = true;
+  setTSBadge(textScanner.isReady ? 'active' : 'inactive', textScanner.isReady ? 'READY' : 'IDLE');
+  if (tsProgressPoll) { clearInterval(tsProgressPoll); tsProgressPoll = null; }
+}
+
+function drawWordHighlights(canvas, words, sourceCanvas) {
+  // Copy frozen frame then overlay word bounding boxes
+  const ctx = canvas.getContext('2d');
+  canvas.width = sourceCanvas.width;
+  canvas.height = sourceCanvas.height;
+  ctx.drawImage(sourceCanvas, 0, 0);
+
+  // Draw semi-transparent highlights for each word
+  for (const w of words) {
+    if (w.confidence < 40) continue;
+    const { x0, y0, x1, y1 } = w.bbox;
+    // Highlight background
+    ctx.fillStyle = 'rgba(139, 203, 216, 0.18)';
+    ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    // Border
+    ctx.strokeStyle = 'rgba(139, 203, 216, 0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  }
+}
+
+DOM.tsScanBtn.addEventListener('click', async () => {
+  if (textScanner.state === 'scanning' || textScanner.state === 'summarizing') return;
+
+  DOM.tsScanBtn.disabled = true;
+  DOM.tsScanBtn.textContent = '⏳ Scanning…';
+  DOM.tsScanBtn.classList.add('scanning');
+  DOM.tsClearBtn.disabled = true;
+  DOM.tsError.style.display = 'none';
+  setTSBadge('scanning', '🔍 SCANNING');
+
+  // Show progress bar
+  DOM.tsProgressRow.style.display = 'flex';
+  DOM.tsProgressBar.style.width = '0%';
+  DOM.tsProgressVal.textContent = '0%';
+
+  // Poll for OCR progress
+  tsProgressPoll = setInterval(() => {
+    const p = textScanner.progress;
+    DOM.tsProgressBar.style.width = `${p}%`;
+    DOM.tsProgressVal.textContent = `${p}%`;
+  }, 200);
+
+  try {
+    // Step 1: OCR
+    const { canvas: frozenCanvas, words, text } = await textScanner.scan(DOM.webcam);
+
+    clearInterval(tsProgressPoll);
+    tsProgressPoll = null;
+    DOM.tsProgressBar.style.width = '100%';
+    DOM.tsProgressVal.textContent = '100%';
+
+    // Show frozen frame with highlights
+    if (words.length > 0) {
+      drawWordHighlights(DOM.tsFrozenCanvas, words, frozenCanvas);
+    } else {
+      const ctx = DOM.tsFrozenCanvas.getContext('2d');
+      DOM.tsFrozenCanvas.width = frozenCanvas.width;
+      DOM.tsFrozenCanvas.height = frozenCanvas.height;
+      ctx.drawImage(frozenCanvas, 0, 0);
+    }
+    DOM.tsFrozenCanvas.classList.add('visible');
+    DOM.tsFramePlaceholder.classList.add('hidden');
+
+    // Show extracted text
+    if (text) {
+      DOM.tsRawText.textContent = text;
+      DOM.tsRawText.classList.add('has-content');
+      DOM.tsCharCount.textContent = `${text.length} chars`;
+    } else {
+      DOM.tsRawText.innerHTML = '<span class="ts-placeholder-text">No readable text detected</span>';
+      DOM.tsRawText.classList.remove('has-content');
+      DOM.tsCharCount.textContent = '';
+    }
+
+    // Show error if no text
+    if (textScanner.error) {
+      DOM.tsError.textContent = textScanner.error;
+      DOM.tsError.style.display = '';
+      DOM.tsScanBtn.disabled = false;
+      DOM.tsScanBtn.textContent = '🔍 Rescan';
+      DOM.tsScanBtn.classList.remove('scanning');
+      DOM.tsClearBtn.disabled = false;
+      setTSBadge('done', '✓ DONE');
+      return;
+    }
+
+    // Step 2: Summarize with Ollama
+    setTSBadge('summarizing', '🧠 THINKING');
+    DOM.tsScanBtn.textContent = '🧠 Summarizing…';
+    DOM.tsSummaryBox.innerHTML = '<span class="ts-cursor"></span>';
+    DOM.tsSummaryBox.classList.add('streaming');
+    DOM.tsSummaryBox.classList.remove('has-content');
+
+    await textScanner.summarize(text, (partial) => {
+      DOM.tsSummaryBox.innerHTML = partial + '<span class="ts-cursor"></span>';
+      DOM.tsSummaryBox.scrollTop = DOM.tsSummaryBox.scrollHeight;
+    });
+
+    // Finalize
+    DOM.tsSummaryBox.classList.remove('streaming');
+    if (textScanner.summary) {
+      DOM.tsSummaryBox.textContent = textScanner.summary;
+      DOM.tsSummaryBox.classList.add('has-content');
+      sendToOLED('textscanner', {
+        line1: 'SUMMARY:',
+        line2: textScanner.summary,
+        scroll: true,
+      });
+    } else {
+      DOM.tsSummaryBox.innerHTML = '<span class="ts-placeholder-text">No summary generated</span>';
+    }
+
+    if (textScanner.error && textScanner.state === 'error') {
+      DOM.tsError.textContent = textScanner.error;
+      DOM.tsError.style.display = '';
+      setTSBadge('error', '⚠ ERROR');
+    } else {
+      setTSBadge('done', '✓ DONE');
+    }
+
+  } catch (err) {
+    DOM.tsError.textContent = `Unexpected error: ${err.message}`;
+    DOM.tsError.style.display = '';
+    setTSBadge('error', '⚠ ERROR');
+  } finally {
+    if (tsProgressPoll) { clearInterval(tsProgressPoll); tsProgressPoll = null; }
+    DOM.tsScanBtn.disabled = false;
+    DOM.tsScanBtn.textContent = '🔍 Rescan';
+    DOM.tsScanBtn.classList.remove('scanning');
+    DOM.tsClearBtn.disabled = false;
+    setTimeout(() => { DOM.tsProgressRow.style.display = 'none'; }, 1500);
+  }
+});
+
+DOM.tsClearBtn.addEventListener('click', () => {
+  resetTextScannerUI();
+});
+
+// ── Camera Source Toggle ──
+const btnLaptop = document.getElementById('btnLaptopCam');
+const btnPi = document.getElementById('btnPiCam');
+
+function stopCurrentStream() {
+  // FIX: Stop all hardware tracks FIRST so the laptop webcam fully releases
+  // before we null srcObject. Without this, the canvas captureStream from the
+  // previous mode can keep the underlying getUserMedia alive and "bleed through".
+  if (DOM.webcam.srcObject) {
+    const stream = DOM.webcam.srcObject;
+    DOM.webcam.pause();
+    DOM.webcam.srcObject = null;   // detach before stopping to avoid a race
+    if (stream && typeof stream.getTracks === 'function') {
+      stream.getTracks().forEach(track => track.stop());
+    }
+  }
+  // FIX: Also clear the src attribute — belt-and-suspenders against bleed-through.
+  DOM.webcam.removeAttribute('src');
+  DOM.webcam.load();               // resets the media element state machine
+
+  // Cancel the Pi MJPEG draw loop
+  if (piFrameLoopId) {
+    cancelAnimationFrame(piFrameLoopId);
+    piFrameLoopId = null;
+  }
+  // FIX: Abort the MJPEG img load so the browser stops downloading stream data.
+  // Setting src='' alone may not abort an in-flight multipart response.
+  if (piImgEl) {
+    piImgEl.onload = null;
+    piImgEl.onerror = null;
+    piImgEl.src = 'about:blank';   // forces connection teardown in all browsers
+    piImgEl = null;
+  }
+  // Wipe the offscreen Pi canvas so stale frames can't be read
+  if (piFrameCtx && piFrameCanvas) {
+    piFrameCtx.clearRect(0, 0, piFrameCanvas.width, piFrameCanvas.height);
+  }
+  piFrameCanvas = null;
+  piFrameCtx = null;
+}
+async function handleCameraSwitch(targetIsPi) {
+  if (usePiCamera === targetIsPi) return;
+  usePiCamera = targetIsPi;
+
+  if (usePiCamera) {
+    btnPi.classList.add('active', 'pi');
+    btnLaptop.classList.remove('active');
+    DOM.webcam.style.transform = 'scaleX(1)';
+    DOM.canvas.style.transform = 'scaleX(1)';
+  } else {
+    btnLaptop.classList.add('active');
+    btnLaptop.classList.remove('pi');
+    btnPi.classList.remove('active', 'pi');
+    DOM.webcam.style.transform = 'scaleX(-1)';
+    DOM.canvas.style.transform = 'scaleX(-1)';
+  }
+  if (!DOM.statusDot.classList.contains('active')) return;
+  try {
+    DOM.statusText.textContent = '🔄 Switching camera source...';
+    stopCurrentStream();
+
+    if (usePiCamera) {
+      await startPiCameraStream();
+    } else {
+      await startLaptopCameraStream();
+    }
+
+    const vw = usePiCamera ? piFrameCanvas.width : DOM.webcam.videoWidth;
+    const vh = usePiCamera ? piFrameCanvas.height : DOM.webcam.videoHeight;
+    DOM.canvas.width = vw;
+    DOM.canvas.height = vh;
+    analysisCanvas.width = vw;
+    analysisCanvas.height = vh;
+
+    DOM.resolution.textContent = `${vw}×${vh}${usePiCamera ? ' (Pi Cam)' : ''}`;
+    DOM.statusText.textContent = usePiCamera ? '📡 Pi Camera Active' : 'Analyzing emotions…';
+  } catch (err) {
+    console.error("Camera source swap failed:", err);
+    DOM.statusText.textContent = `❌ Switch Error: ${err.message}`;
+  }
+}
+btnLaptop.addEventListener('click', () => handleCameraSwitch(false));
+btnPi.addEventListener('click', () => handleCameraSwitch(true));
+
 // ── Start Button ──
 DOM.startBtn.addEventListener('click', async () => {
   DOM.startBtn.disabled = true;
-  DOM.startBtn.textContent = 'Starting…';
+  DOM.startBtn.textContent = '⏳ Starting…';
   DOM.errorMsg.style.display = 'none';
 
   try {
@@ -191,29 +514,26 @@ DOM.startBtn.addEventListener('click', async () => {
     DOM.errorMsg.textContent = `Camera error: ${err.message}`;
     DOM.errorMsg.style.display = 'block';
     DOM.startBtn.disabled = false;
-    DOM.startBtn.textContent = 'Retry';
+    DOM.startBtn.textContent = '🔄 Retry';
   }
 });
 
 // ── Camera Setup ──
 async function startCamera() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-    audio: false,
-  });
+  if (usePiCamera) {
+    await startPiCameraStream();
+  } else {
+    await startLaptopCameraStream();
+  }
 
-  DOM.webcam.srcObject = stream;
-  await new Promise(r => { DOM.webcam.onloadedmetadata = r; });
-  await DOM.webcam.play();
-
-  // Set canvas sizes
-  const vw = DOM.webcam.videoWidth;
-  const vh = DOM.webcam.videoHeight;
+  // Set canvas sizes — for Pi cam, startPiCameraStream already set DOM.canvas dimensions
+  const vw = usePiCamera ? piFrameCanvas.width : DOM.webcam.videoWidth;
+  const vh = usePiCamera ? piFrameCanvas.height : DOM.webcam.videoHeight;
   DOM.canvas.width = vw;
   DOM.canvas.height = vh;
   analysisCanvas.width = vw;
   analysisCanvas.height = vh;
-  DOM.resolution.textContent = `${vw}×${vh}`;
+  DOM.resolution.textContent = `${vw}×${vh}${usePiCamera ? ' (Pi Cam)' : ''}`;
 
   // Hide permission screen, show loading
   DOM.permissionScreen.classList.add('hidden');
@@ -223,6 +543,7 @@ async function startCamera() {
 
   DOM.loadingOverlay.classList.add('hidden');
   DOM.statusDot.classList.add('active');
+  DOM.statusText.textContent = usePiCamera ? '📡 Pi Camera Active' : 'Analyzing emotions…';
 
   // Activate badges
   for (const badge of [DOM.emotionBadge, DOM.focusBadge, DOM.signBadge, DOM.obstacleBadge, DOM.qualityBadge]) {
@@ -239,14 +560,136 @@ async function startCamera() {
   requestAnimationFrame(detectLoop);
 }
 
+// ── Laptop webcam ──
+async function startLaptopCameraStream() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+    audio: false,
+  });
+  DOM.webcam.srcObject = stream;
+  await new Promise(r => { DOM.webcam.onloadedmetadata = r; });
+  await DOM.webcam.play();
+}
+
+// ── Pi Camera Module 3 via MJPEG → canvas → captureStream ──
+async function startPiCameraStream() {
+  const PI_HOST = PI_STREAM_URL.replace('/stream', '');
+
+  // Step 1: Verify the Pi server is reachable.
+  // We probe the root URL — ANY response (even 404) proves the server is up.
+  // Only a network error (unreachable, refused, timeout) should block us.
+  try {
+    await Promise.race([
+      fetch(PI_HOST, { mode: 'cors' }).then(res => {
+        // Any HTTP response means the Pi Flask server is running
+        console.log(`📡 Pi server reachable (HTTP ${res.status})`);
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Pi Camera timed out (8s). Is camera_stream.py running?')), 8000)
+      )
+    ]);
+  } catch (err) {
+    // "Failed to fetch" = CORS block OR network error.
+    // For CORS blocks the Pi IS reachable, so try proceeding with the MJPEG
+    // stream anyway — <img> tags bypass CORS for loading (only drawImage
+    // might fail if the server doesn't send Access-Control headers).
+    if (err.message.includes('Failed to fetch')) {
+      console.warn('⚠️ Pi reachability check got CORS error — Pi may still be reachable, attempting MJPEG stream...');
+    } else {
+      throw new Error(`Cannot reach Pi Camera at ${PI_STREAM_URL} — ${err.message}`);
+    }
+  }
+
+  // Step 2: Set up offscreen canvas to hold MJPEG frames
+  piFrameCanvas = document.createElement('canvas');
+  piFrameCanvas.width = 320;
+  piFrameCanvas.height = 240;
+  piFrameCtx = piFrameCanvas.getContext('2d');
+
+  // Step 3: Create <img> for the MJPEG stream
+  piImgEl = new Image();
+  piImgEl.crossOrigin = 'anonymous';
+
+  // Track frame state
+  let firstFrameReceived = false;
+  let drawErrorLogged = false;
+  let lastGoodFrame = 0;
+
+  // Error handler — surfaces connection failures instead of silent swallow
+  piImgEl.onerror = (e) => {
+    console.error('❌ Pi MJPEG <img> error — stream failed to load.', e);
+    DOM.statusText.textContent = '❌ Pi Camera stream failed to load';
+  };
+
+  piImgEl.src = PI_STREAM_URL;
+
+  // Step 4: Continuously draw MJPEG frames into the offscreen canvas
+  (function drawPiFrame() {
+    if (!piImgEl) return;  // cleaned up by stopCurrentStream
+
+    try {
+      if (piImgEl.naturalWidth > 0) {
+        piFrameCtx.drawImage(piImgEl, 0, 0, piFrameCanvas.width, piFrameCanvas.height);
+        if (!firstFrameReceived) {
+          firstFrameReceived = true;
+          console.log('✅ Pi Camera: first MJPEG frame drawn to canvas');
+        }
+        lastGoodFrame = performance.now();
+      }
+    } catch (e) {
+      // Log CORS / tainted canvas errors ONCE
+      if (!drawErrorLogged) {
+        drawErrorLogged = true;
+        console.error('❌ Pi Camera drawImage failed (CORS/tainted canvas):', e.message);
+        DOM.statusText.textContent = '❌ Pi stream CORS error — update camera_stream.py on Pi';
+      }
+    }
+
+    // Warn if stream stalls (had frames but stopped for 5s)
+    if (firstFrameReceived && (performance.now() - lastGoodFrame > 5000)) {
+      DOM.statusText.textContent = '⚠️ Pi Camera stream stalled';
+      console.warn('⚠️ Pi Camera: no new frames for 5s');
+      lastGoodFrame = performance.now();
+    }
+
+    piFrameLoopId = requestAnimationFrame(drawPiFrame);
+  })();
+
+  // Step 5: Wait for first real frame before wiring up captureStream.
+  // Without this, MediaPipe sees blank frames and the old laptop feed
+  // appears to "bleed through".
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      if (!firstFrameReceived) {
+        reject(new Error('Pi Camera: no MJPEG frames received in 10s. Check Pi network, CORS, and camera_stream.py.'));
+      }
+    }, 10000);
+
+    (function waitForFrame() {
+      if (firstFrameReceived) { clearTimeout(timeout); resolve(); return; }
+      if (!piImgEl) { clearTimeout(timeout); reject(new Error('Pi Camera stream stopped')); return; }
+      setTimeout(waitForFrame, 100);
+    })();
+  });
+
+  // Step 6: Feed canvas as MediaStream into <video> for MediaPipe
+  const canvasStream = piFrameCanvas.captureStream(15);
+  DOM.webcam.srcObject = canvasStream;
+  DOM.canvas.width = 320;
+  DOM.canvas.height = 240;
+  await DOM.webcam.play();
+
+  console.log('📡 Pi Camera stream active and feeding into <video>');
+}
+
 // ── Model Initialization ──
 async function initModels() {
-  DOM.loadingText.innerHTML = 'Loading <span>vision runtime</span>…';
+  DOM.loadingText.innerHTML = 'Warming up <span>vision engine</span>…';
   const filesetResolver = await FilesetResolver.forVisionTasks(
     'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm'
   );
 
-  DOM.loadingText.innerHTML = 'Loading <span>Face Landmarker</span>…';
+  DOM.loadingText.innerHTML = 'Preparing <span>face recognition</span>…';
   faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
     baseOptions: {
       modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
@@ -258,7 +701,7 @@ async function initModels() {
     outputFacialTransformationMatrixes: true,
   });
 
-  DOM.loadingText.innerHTML = 'Loading <span>Hand Landmarker</span>…';
+  DOM.loadingText.innerHTML = 'Preparing <span>hand tracking</span>…';
   handLandmarker = await HandLandmarker.createFromOptions(filesetResolver, {
     baseOptions: {
       modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
@@ -431,12 +874,12 @@ function drawHandSkeleton(ctx, landmarks) {
 
   // Draw connections
   const connections = [
-    [0,1],[1,2],[2,3],[3,4],       // thumb
-    [0,5],[5,6],[6,7],[7,8],       // index
-    [0,9],[9,10],[10,11],[11,12],  // middle
-    [0,13],[13,14],[14,15],[15,16],// ring
-    [0,17],[17,18],[18,19],[19,20],// pinky
-    [5,9],[9,13],[13,17],          // palm
+    [0, 1], [1, 2], [2, 3], [3, 4],       // thumb
+    [0, 5], [5, 6], [6, 7], [7, 8],       // index
+    [0, 9], [9, 10], [10, 11], [11, 12],  // middle
+    [0, 13], [13, 14], [14, 15], [15, 16],// ring
+    [0, 17], [17, 18], [18, 19], [19, 20],// pinky
+    [5, 9], [9, 13], [13, 17],          // palm
   ];
 
   ctx.strokeStyle = 'rgba(105, 240, 174, 0.6)';
@@ -497,6 +940,12 @@ function updateEmotionUI(result) {
     'Neutral': 'var(--text-secondary)',
   };
   DOM.emotionPrimary.style.color = colorMap[result.primary] || 'var(--accent-orange)';
+
+  sendToOLED('emotion', {
+    line1: result.primary.toUpperCase(),
+    line2: result.confidence,
+    scroll: false,
+  });
 }
 
 function updateFocusUI(result) {
@@ -514,6 +963,12 @@ function updateFocusUI(result) {
     'Disengaged': 'var(--text-muted)',
   };
   DOM.focusState.style.color = colorMap[result.state] || 'var(--accent-cyan)';
+
+  sendToOLED('focus', {
+    line1: result.state.toUpperCase(),
+    line2: '',
+    scroll: false,
+  });
 }
 
 function updateSignUI(result) {
@@ -628,6 +1083,12 @@ function updateSignUI(result) {
   }
 
   DOM.signTranscriptHistory.innerHTML = '';
+
+  sendToOLED('sign', {
+    line1: 'SIGNING:',
+    line2: result.sentence || '',
+    scroll: (result.sentence?.length ?? 0) > 16,
+  });
 }
 
 function updateQualityUI(result) {
@@ -704,6 +1165,9 @@ function updateNeuroLensUI(result) {
   // Panel border animation
   DOM.obstaclePanel.classList.toggle('obstacle-warning', result.alertZone === 'NEAR');
   DOM.obstaclePanel.classList.toggle('obstacle-danger', result.alertZone === 'VERY CLOSE');
+
+  // OLED: clear screen in obstacle/blind mode
+  sendToOLED('obstacle', null);
 }
 
 // ── JSON Output ──
@@ -774,9 +1238,9 @@ function syntaxHighlightJSON(json) {
 }
 
 // ── Face Landmark Index Groups ──
-const FACE_OVAL = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109,10];
-const LEFT_EYE = [33,246,161,160,159,158,157,173,133,155,154,153,145,144,163,7,33];
-const RIGHT_EYE = [362,398,384,385,386,387,388,466,263,249,390,373,374,380,381,382,362];
-const LIPS_OUTER = [61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185,61];
-const LEFT_EYEBROW = [70,63,105,66,107,55,65,52,53,46,70];
-const RIGHT_EYEBROW = [300,293,334,296,336,285,295,282,283,276,300];
+const FACE_OVAL = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10];
+const LEFT_EYE = [33, 246, 161, 160, 159, 158, 157, 173, 133, 155, 154, 153, 145, 144, 163, 7, 33];
+const RIGHT_EYE = [362, 398, 384, 385, 386, 387, 388, 466, 263, 249, 390, 373, 374, 380, 381, 382, 362];
+const LIPS_OUTER = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185, 61];
+const LEFT_EYEBROW = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46, 70];
+const RIGHT_EYEBROW = [300, 293, 334, 296, 336, 285, 295, 282, 283, 276, 300];

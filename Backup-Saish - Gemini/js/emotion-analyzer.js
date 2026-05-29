@@ -17,24 +17,39 @@ const EMOTION_PROFILES = {
   sad: {
     label: 'Sad',
     weights: {
-      mouthFrownLeft: 0.22, mouthFrownRight: 0.22,
-      browInnerUp: 0.22,
+      mouthFrownLeft: 0.20, mouthFrownRight: 0.20,
+      browInnerUp: 0.25,
       mouthLowerDownLeft: 0.07, mouthLowerDownRight: 0.07,
-      mouthPressLeft: 0.06, mouthPressRight: 0.06,
-      mouthPucker: 0.08,
+      mouthPressLeft: 0.05, mouthPressRight: 0.05,
+      mouthPucker: 0.06,
+      // Lip corners down is key distinguisher for sad
+      mouthStretchLeft: 0.025, mouthStretchRight: 0.025,
     },
-    threshold: 0.14,
+    // Negative inhibitors: presence of these REDUCES sad score
+    inhibitors: {
+      browDownLeft: 0.35, browDownRight: 0.35,
+      noseSneerLeft: 0.25, noseSneerRight: 0.25,
+      jawForward: 0.20,
+    },
+    threshold: 0.16,
   },
   angry: {
     label: 'Angry',
     weights: {
-      browDownLeft: 0.22, browDownRight: 0.22,
-      eyeSquintLeft: 0.09, eyeSquintRight: 0.09,
-      jawForward: 0.1,
-      mouthShrugLower: 0.08,
-      noseSneerLeft: 0.1, noseSneerRight: 0.1,
+      browDownLeft: 0.25, browDownRight: 0.25,
+      noseSneerLeft: 0.12, noseSneerRight: 0.12,
+      jawForward: 0.10,
+      mouthShrugLower: 0.06,
+      // Tightened eyes + pressed lips are key for angry
+      eyeSquintLeft: 0.05, eyeSquintRight: 0.05,
     },
-    threshold: 0.16,
+    // Negative inhibitors: presence of these REDUCES angry score
+    inhibitors: {
+      browInnerUp: 0.40,
+      mouthPucker: 0.20,
+      mouthFrownLeft: 0.10, mouthFrownRight: 0.10,
+    },
+    threshold: 0.18,
   },
   surprised: {
     label: 'Surprised',
@@ -111,7 +126,16 @@ export class EmotionAnalyzer {
           parts.push(`${shapeName}: ${val.toFixed(2)}`);
         }
       }
-      rawScores[emoKey] = score;
+      // Apply inhibitors — subtract penalty when conflicting blendshapes are active
+      if (profile.inhibitors) {
+        for (const [shapeName, penalty] of Object.entries(profile.inhibitors)) {
+          const val = bs[shapeName] || 0;
+          if (val > 0.1) {
+            score -= val * penalty;
+          }
+        }
+      }
+      rawScores[emoKey] = Math.max(0, score);
     }
 
     // Check for contempt (asymmetric smile)
