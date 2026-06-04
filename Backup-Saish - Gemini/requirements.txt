@@ -8,4 +8,4 @@ numpy>=1.24.0
 #
 # Install manually if missing:
 #   sudo apt install -y python3-picamera2 python3-libcamera
-#   pip install flask flask-cors opencv-python-headless
+#   pip install flask flask-cors opencv-python-headless luma.oled Pillow

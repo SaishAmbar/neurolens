@@ -54,6 +54,7 @@ class DistanceEstimator:
 
         Uses the pinhole camera model: distance = (real_height × focal_length) / pixel_height
         Falls back to bbox-to-frame ratio if the object type is unknown.
+        Reuses pre-calculated attributes from the detection if available.
 
         Args:
             detection: Detection object
@@ -61,27 +62,34 @@ class DistanceEstimator:
         Returns:
             DistanceResult
         """
-        x, y, w, h = detection.bbox
-        bbox_height = max(h, 1)  # avoid division by zero
+        estimated_cm = getattr(detection, "estimated_cm", 0.0)
+        zone = getattr(detection, "zone", "SAFE")
+        direction = getattr(detection, "direction", "CENTER")
+        danger_score = getattr(detection, "danger_score", 0.0)
 
-        # ── Primary: Pinhole camera model ─────────────────────────────────
-        known_height = config.KNOWN_HEIGHTS_CM.get(detection.class_name)
-
-        if known_height is not None and bbox_height > 0:
-            estimated_cm = (known_height * self._focal_length) / bbox_height
+        # Color mapping based on zone
+        if zone == config.ZONE_VERY_CLOSE:
+            zone_color = config.COLOR_VERY_CLOSE
+        elif zone == config.ZONE_NEAR:
+            zone_color = config.COLOR_NEAR
         else:
-            # Fallback: estimate from bbox ratio (assume generic 100cm object)
-            ratio = bbox_height / self.frame_height
-            estimated_cm = max(50, (1.0 - ratio) * 500)  # rough linear mapping
+            zone_color = config.COLOR_SAFE
 
-        # ── Classify zone ─────────────────────────────────────────────────
-        zone, zone_color = self._classify_zone(estimated_cm, bbox_height)
+        # Fallback calculation if not pre-calculated
+        if estimated_cm == 0.0:
+            x, y, w, h = detection.bbox
+            bbox_height = max(h, 1)  # avoid division by zero
+            known_height = config.KNOWN_HEIGHTS_CM.get(detection.class_name)
 
-        # ── Determine direction ───────────────────────────────────────────
-        direction = self._classify_direction(detection.center_x)
+            if known_height is not None and bbox_height > 0:
+                estimated_cm = (known_height * self._focal_length) / bbox_height
+            else:
+                ratio = bbox_height / self.frame_height
+                estimated_cm = max(50.0, (1.0 - ratio) * 500)  # rough linear mapping
 
-        # ── Calculate danger score ────────────────────────────────────────
-        danger_score = self._calculate_danger(estimated_cm, detection.center_x, detection.class_name)
+            zone, zone_color = self._classify_zone(estimated_cm, bbox_height)
+            direction = self._classify_direction(detection.center_x)
+            danger_score = self._calculate_danger(estimated_cm, detection.center_x, detection.class_name)
 
         return DistanceResult(
             detection=detection,

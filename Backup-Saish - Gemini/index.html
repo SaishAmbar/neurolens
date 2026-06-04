@@ -7,7 +7,7 @@
   <meta name="description"
     content="NeuroLens — Real-time multimodal behavioral perception with emotion detection, focus analysis, and sign language recognition.">
   <title>NeuroLens — Behavioral Perception</title>
-  <link rel="stylesheet" href="index.css?v=2">
+  <link rel="stylesheet" href="index.css?v=15">
   <script type="importmap">
   {
     "imports": {
@@ -28,6 +28,13 @@
 </head>
 
 <body>
+
+  <!-- Ambient Floating Background Blobs (Active in Calm Mode) -->
+  <div class="calm-bg-blobs">
+    <div class="calm-blob b1"></div>
+    <div class="calm-blob b2"></div>
+    <div class="calm-blob b3"></div>
+  </div>
 
   <!-- ===== ONBOARDING OVERLAY ===== -->
   <div id="onboardingOverlay" class="onboarding-overlay" style="display:none;">
@@ -106,7 +113,7 @@
 
   <!-- ===== HEADER ===== -->
   <header class="header">
-    <div class="logo">
+    <div class="logo" style="display: flex; align-items: center; gap: 0.75rem; justify-self: start;">
       <div class="logo-icon">
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="url(#logo-grad-header)" stroke-width="1.5"
           stroke-linecap="round" stroke-linejoin="round">
@@ -123,16 +130,18 @@
       </div>
       <div class="logo-text"><span>NeuroLens</span></div>
     </div>
-    <div class="header-right-controls" style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-      <!-- Camera Source Toggle -->
-      <div class="cam-source-toggle" id="camSourceToggle">
-        <button class="cam-btn active" id="btnLaptopCam" title="Use laptop webcam">Laptop Camera</button>
-        <button class="cam-btn" id="btnPiCam" title="Use Pi Camera Module 3">Pi Camera</button>
-      </div>
 
+    <!-- Camera Source Toggle brought to top center -->
+    <div class="cam-source-toggle" id="camSourceToggle" style="grid-column: 2; justify-self: center;">
+      <button class="cam-btn active" id="btnLaptopCam" title="Use laptop webcam">Laptop Camera</button>
+      <button class="cam-btn" id="btnPiCam" title="Use Pi Camera Module 3">Pi Camera</button>
+    </div>
+
+    <div class="header-right-controls" style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; justify-self: end;">
       <!-- Accessibility Toggles -->
       <div class="a11y-toggles">
         <button class="a11y-toggle-btn" id="focusModeBtn" title="Focus Mode — highlight active panel only">🎯 Focus</button>
+        <button class="a11y-toggle-btn" id="easyReadBtn" title="Easy Read — high contrast large typography">📖 Easy Read</button>
       </div>
 
       <!-- Theme Switcher (3 options) -->
@@ -200,7 +209,7 @@
     <aside class="panels-column">
 
       <!-- Mode Selector Tabs -->
-      <div class="mode-tabs mode-tabs-5" id="modeTabs">
+      <div class="mode-tabs mode-tabs-6" id="modeTabs">
         <button class="mode-tab active" data-mode="emotion" id="tabEmotion">
           <span class="tab-label">Emotion</span>
         </button>
@@ -215,6 +224,9 @@
         </button>
         <button class="mode-tab" data-mode="textscanner" id="tabTextScanner">
           <span class="tab-label">Text Scanner</span>
+        </button>
+        <button class="mode-tab" data-mode="calmzone" id="tabCalmZone">
+          <span class="tab-label">Calm Zone</span>
         </button>
       </div>
 
@@ -242,9 +254,16 @@
 
       <!-- Focus Panel -->
       <div class="panel focus mode-panel" id="focusPanel" data-mode="focus" style="display:none;">
-        <div class="panel-header">
+        <div class="panel-header" style="flex-wrap: wrap; gap: 0.4rem;">
           <div class="panel-title">Focus / Attention</div>
-          <span class="panel-badge inactive" id="focusBadge">IDLE</span>
+          <div style="display:flex; align-items:center; gap:0.5rem; margin-left:auto;">
+            <select id="recoveryActivitySelect" title="Recovery Activity" style="background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--glass-border); border-radius: 20px; padding: 0.15rem 0.4rem; font-size: 0.65rem; font-family: var(--font); outline: none; cursor: pointer; max-width: 130px;">
+              <option value="tracking">🎯 Tracking</option>
+              <option value="breathing">🧘 Breathing</option>
+              <option value="gymnastics">👀 Gymnastics</option>
+            </select>
+            <span class="panel-badge inactive" id="focusBadge">IDLE</span>
+          </div>
         </div>
         <div class="charismatic-value primary-value" id="focusState" style="color: var(--accent-cyan)">—</div>
         <div class="confidence-row">
@@ -330,7 +349,18 @@
       <div class="panel neurolens mode-panel" id="obstaclePanel" data-mode="neurolens" style="display:none;">
         <div class="panel-header">
           <div class="panel-title">Obstacle Detection</div>
-          <span class="panel-badge inactive" id="obstacleBadge">IDLE</span>
+          <div class="nl-header-controls" style="display: flex; gap: 8px; align-items: center;">
+            <label class="sign-toggle" id="nlAudioToggle" title="Toggle audio alerts on/off">
+              <input type="checkbox" id="nlAudioToggleInput">
+              <span class="sign-toggle-slider"></span>
+              <span class="sign-toggle-label" id="nlAudioToggleLabel" style="font-size: 1rem;">🔈</span>
+            </label>
+            <select class="nl-mode-select" id="nlModeSelect" title="Select detection mode" style="background: rgba(20, 20, 25, 0.75); border: 1px solid rgba(255, 255, 255, 0.15); color: #dce0e8; border-radius: 6px; padding: 4px 8px; font-size: 0.8rem; cursor: pointer; outline: none; transition: border-color 0.2s;">
+              <option value="navigation">🚶 Navigation</option>
+              <option value="desktop">🖥️ Desktop</option>
+            </select>
+            <span class="panel-badge inactive" id="obstacleBadge">IDLE</span>
+          </div>
         </div>
 
         <!-- Alert Zone -->
@@ -413,7 +443,10 @@
         <div class="ts-section">
           <div class="ts-section-header">
             <span class="ts-section-title">AI Summary</span>
-            <span class="ts-model-label" id="tsModelLabel">qwen2.5:3b via Ollama</span>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button class="ts-read-aloud-btn" id="tsReadAloudBtn" title="Read summary aloud" style="background: rgba(255, 255, 255, 0.1); border: none; color: #fff; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 0.8rem; display: none;">🔊 Read</button>
+              <span class="ts-model-label" id="tsModelLabel">qwen2.5:3b via Ollama</span>
+            </div>
           </div>
           <div class="ts-summary-box" id="tsSummaryBox">
             <span class="ts-placeholder-text">Summary will appear here…</span>
@@ -424,6 +457,232 @@
         <div class="ts-error" id="tsError" style="display:none;"></div>
 
         <div class="evidence" id="tsEvidence">Engine: Tesseract.js v5 (browser) · Summarization: Ollama (local)</div>
+      </div>
+
+      <!-- Calm Zone Panel -->
+      <div class="panel calmzone mode-panel" id="calmZonePanel" data-mode="calmzone" style="display:none;">
+        <div class="panel-header">
+          <div class="panel-title">Calm & Neuro Support Zone</div>
+          <span class="panel-badge inactive" id="calmZoneBadge">ACTIVE</span>
+        </div>
+
+        <!-- Supportive AI message banner -->
+        <div class="cz-support-banner" id="czSupportBanner">
+          <span class="cz-support-emoji" id="czSupportEmoji">🧘</span>
+          <span class="cz-support-msg" id="czSupportMsg">Welcome to the Calm Zone. Take a deep breath and relax.</span>
+        </div>
+
+        <!-- Soothing Calm Mode Switch Card -->
+        <div class="cz-theme-card">
+          <div class="cz-theme-card-left">
+            <div class="cz-theme-card-title">
+              <span>🧘</span> Calm Mode
+            </div>
+            <div class="cz-theme-card-desc">Reduces brightness, softens contrast, and plays calming ambient visuals.</div>
+          </div>
+          <button class="btn-primary cz-toggle-btn" id="czCalmModeToggle">Activate</button>
+        </div>
+
+        <!-- Internal tabs in Calm Zone -->
+        <div class="cz-subtabs" id="czSubtabs">
+          <button class="cz-subtab active" data-cztab="sounds">🎵 Sounds</button>
+          <button class="cz-subtab" data-cztab="videos">🎥 Videos</button>
+          <button class="cz-subtab" data-cztab="reset">🎯 Focus Reset</button>
+        </div>
+
+        <!-- Soundscapes Tab Content -->
+        <div class="cz-tab-content active" id="czSoundsTab" data-cztab="sounds">
+          <div class="cz-soundscape-grid">
+            <div class="cz-sound-card" id="czSoundRain" data-sound="rain">
+              <span class="cz-sound-icon">🌧️</span>
+              <span class="cz-sound-title">Gentle Rain</span>
+              <button class="cz-play-btn">Play</button>
+            </div>
+            <div class="cz-sound-card" id="czSoundOcean" data-sound="ocean">
+              <span class="cz-sound-icon">🌊</span>
+              <span class="cz-sound-title">Ocean Waves</span>
+              <button class="cz-play-btn">Play</button>
+            </div>
+            <div class="cz-sound-card" id="czSoundForest" data-sound="forest">
+              <span class="cz-sound-icon">🌳</span>
+              <span class="cz-sound-title">Forest Birds</span>
+              <button class="cz-play-btn">Play</button>
+            </div>
+            <div class="cz-sound-card" id="czSoundFireplace" data-sound="fireplace">
+              <span class="cz-sound-icon">🔥</span>
+              <span class="cz-sound-title">Cozy Fireplace</span>
+              <button class="cz-play-btn">Play</button>
+            </div>
+            <div class="cz-sound-card" id="czSoundCrickets" data-sound="crickets">
+              <span class="cz-sound-icon">🌙</span>
+              <span class="cz-sound-title">Night Crickets</span>
+              <button class="cz-play-btn">Play</button>
+            </div>
+            <div class="cz-sound-card" id="czSoundWind" data-sound="wind">
+              <span class="cz-sound-icon">☁️</span>
+              <span class="cz-sound-title">Soft Wind Breeze</span>
+              <button class="cz-play-btn">Play</button>
+            </div>
+            <div class="cz-sound-card" id="czSoundPiano" data-sound="piano">
+              <span class="cz-sound-icon">🎹</span>
+              <span class="cz-sound-title">Calm Piano</span>
+              <button class="cz-play-btn">Play</button>
+            </div>
+            <div class="cz-sound-card" id="czSoundSpace" data-sound="space">
+              <span class="cz-sound-icon">🌌</span>
+              <span class="cz-sound-title">Space Ambience</span>
+              <button class="cz-play-btn">Play</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Videos Tab Content -->
+        <div class="cz-tab-content" id="czVideosTab" data-cztab="videos">
+          <!-- Nature Calm Category -->
+          <div class="cz-category-section">
+            <h3 class="cz-category-title"><span class="cz-category-icon">🌿</span> Nature Calm</h3>
+            <div class="cz-video-grid">
+              <div class="cz-video-card" data-video-id="yIQd2Ya0Ziw" data-video-title="Gentle Rain">
+                <div class="cz-video-thumb" style="background-image: url('https://img.youtube.com/vi/yIQd2Ya0Ziw/hqdefault.jpg')">
+                  <div class="cz-video-play-icon">▶</div>
+                </div>
+                <div class="cz-video-info">
+                  <span class="cz-video-title">Gentle Rain</span>
+                  <span class="cz-video-desc">Soft relaxing rain ambience for stress relief and focus.</span>
+                </div>
+              </div>
+              <div class="cz-video-card" data-video-id="V-_O7nl0Ii0" data-video-title="Ocean Waves">
+                <div class="cz-video-thumb" style="background-image: url('https://img.youtube.com/vi/V-_O7nl0Ii0/hqdefault.jpg')">
+                  <div class="cz-video-play-icon">▶</div>
+                </div>
+                <div class="cz-video-info">
+                  <span class="cz-video-title">Ocean Waves</span>
+                  <span class="cz-video-desc">Peaceful ocean waves with calming beach ambience.</span>
+                </div>
+              </div>
+              <div class="cz-video-card" data-video-id="xNN7iTA57jM" data-video-title="Forest Birds">
+                <div class="cz-video-thumb" style="background-image: url('https://img.youtube.com/vi/xNN7iTA57jM/hqdefault.jpg')">
+                  <div class="cz-video-play-icon">▶</div>
+                </div>
+                <div class="cz-video-info">
+                  <span class="cz-video-title">Forest Birds</span>
+                  <span class="cz-video-desc">Relaxing forest ambience with gentle bird sounds.</span>
+                </div>
+              </div>
+              <div class="cz-video-card" data-video-id="8myYyMg1fFE" data-video-title="Soft Wind Breeze">
+                <div class="cz-video-thumb" style="background-image: url('https://img.youtube.com/vi/8myYyMg1fFE/hqdefault.jpg')">
+                  <div class="cz-video-play-icon">▶</div>
+                </div>
+                <div class="cz-video-info">
+                  <span class="cz-video-title">Soft Wind Breeze</span>
+                  <span class="cz-video-desc">Gentle wind through trees creating a calm atmosphere.</span>
+                </div>
+              </div>
+              <div class="cz-video-card" data-video-id="9X4iXYqxlPA" data-video-title="Night Crickets">
+                <div class="cz-video-thumb" style="background-image: url('https://img.youtube.com/vi/9X4iXYqxlPA/hqdefault.jpg')">
+                  <div class="cz-video-play-icon">▶</div>
+                </div>
+                <div class="cz-video-info">
+                  <span class="cz-video-title">Night Crickets</span>
+                  <span class="cz-video-desc">Peaceful nighttime cricket ambience for sensory comfort.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Focus Support Category -->
+          <div class="cz-category-section">
+            <h3 class="cz-category-title"><span class="cz-category-icon">🧠</span> Focus Support</h3>
+            <div class="cz-video-grid">
+              <div class="cz-video-card" data-video-id="Q6MemVxEquE" data-video-title="Brown Noise Focus">
+                <div class="cz-video-thumb" style="background-image: url('https://img.youtube.com/vi/Q6MemVxEquE/hqdefault.jpg')">
+                  <div class="cz-video-play-icon">▶</div>
+                </div>
+                <div class="cz-video-info">
+                  <span class="cz-video-title">Brown Noise Focus</span>
+                  <span class="cz-video-desc">Deep calming background sound for ADHD focus support.</span>
+                </div>
+              </div>
+              <div class="cz-video-card" data-video-id="1ZYbU82GVz4" data-video-title="Calm Piano">
+                <div class="cz-video-thumb" style="background-image: url('https://img.youtube.com/vi/1ZYbU82GVz4/hqdefault.jpg')">
+                  <div class="cz-video-play-icon">▶</div>
+                </div>
+                <div class="cz-video-info">
+                  <span class="cz-video-title">Calm Piano</span>
+                  <span class="cz-video-desc">Soft piano melodies for focus and emotional relaxation.</span>
+                </div>
+              </div>
+              <div class="cz-video-card" data-video-id="aXItOY0sLRY" data-video-title="Breathing Relaxation">
+                <div class="cz-video-thumb" style="background-image: url('https://img.youtube.com/vi/aXItOY0sLRY/hqdefault.jpg')">
+                  <div class="cz-video-play-icon">▶</div>
+                </div>
+                <div class="cz-video-info">
+                  <span class="cz-video-title">Breathing Relaxation</span>
+                  <span class="cz-video-desc">Guided calming breathing exercise for stress reduction.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Emotional Comfort Category -->
+          <div class="cz-category-section">
+            <h3 class="cz-category-title"><span class="cz-category-icon">🌙</span> Emotional Comfort</h3>
+            <div class="cz-video-grid">
+              <div class="cz-video-card" data-video-id="6JeZR13dLLI" data-video-title="Space Relaxation">
+                <div class="cz-video-thumb" style="background-image: url('https://img.youtube.com/vi/6JeZR13dLLI/hqdefault.jpg')">
+                  <div class="cz-video-play-icon">▶</div>
+                </div>
+                <div class="cz-video-info">
+                  <span class="cz-video-title">Space Relaxation</span>
+                  <span class="cz-video-desc">Futuristic calming ambient space visuals and sounds.</span>
+                </div>
+              </div>
+              <div class="cz-video-card" data-video-id="L_LUpnjgPso" data-video-title="Cozy Fireplace">
+                <div class="cz-video-thumb" style="background-image: url('https://img.youtube.com/vi/L_LUpnjgPso/hqdefault.jpg')">
+                  <div class="cz-video-play-icon">▶</div>
+                </div>
+                <div class="cz-video-info">
+                  <span class="cz-video-title">Cozy Fireplace</span>
+                  <span class="cz-video-desc">Warm relaxing fireplace ambience for emotional comfort.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Focus Reset Tab Content -->
+        <div class="cz-tab-content" id="czResetTab" data-cztab="reset">
+          <div class="cz-reset-widget">
+            <div class="cz-reset-controls" id="czResetControls">
+              <button class="cz-reset-btn active" data-widget="bubble">🫧 Bubble Follow</button>
+              <button class="cz-reset-btn" data-widget="breath">🧘 Breath Guide</button>
+              <button class="cz-reset-btn" data-widget="dots">🟢 Dot Tracker</button>
+            </div>
+            <div class="cz-reset-stage" id="czResetStage">
+              <!-- Bubble Follow Area -->
+              <div class="cz-reset-area" id="czWidgetBubble" style="cursor: crosshair;">
+                <div class="cz-reset-desc">Move cursor inside this box. Let the bubble follow you.</div>
+                <div class="cz-bubble-tracker" id="czBubbleTracker"></div>
+              </div>
+              
+              <!-- Breath Area -->
+              <div class="cz-reset-area" id="czWidgetBreath" style="display: none;">
+                <div class="cz-reset-desc">Follow the expanding circle to regulate breathing.</div>
+                <div class="cz-breath-circle-container">
+                  <div class="cz-breath-circle" id="czBreathCircle"></div>
+                  <span class="cz-breath-label" id="czBreathLabel">Inhale</span>
+                </div>
+              </div>
+
+              <!-- Dot Tracker Area -->
+              <div class="cz-reset-area" id="czWidgetDots" style="display: none;">
+                <div class="cz-reset-desc">Click each appearing dot to reset your visual focus.</div>
+                <div class="cz-dots-container" id="czDotsContainer"></div>
+                <div class="cz-dots-counter" id="czDotsCounter">Cleared: 0/5</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Visual Quality Panel (always visible) -->
@@ -490,6 +749,20 @@
         const isActive = document.body.classList.toggle('focus-mode');
         focusModeBtn.classList.toggle('active', isActive);
         localStorage.setItem('neurolens-focus-mode', isActive);
+      });
+
+      // ── EASY READ TOGGLE ──
+      const easyReadBtn = document.getElementById('easyReadBtn');
+      const savedEasyRead = localStorage.getItem('neurolens-easy-read') === 'true';
+      if (savedEasyRead) {
+        document.body.classList.add('easy-read');
+        easyReadBtn.classList.add('active');
+      }
+
+      easyReadBtn.addEventListener('click', () => {
+        const isActive = document.body.classList.toggle('easy-read');
+        easyReadBtn.classList.toggle('active', isActive);
+        localStorage.setItem('neurolens-easy-read', isActive);
       });
 
 
@@ -582,7 +855,59 @@
 
     });
   </script>
-  <script type="module" src="js/app.js?v=2"></script>
+  <!-- ===== NEUROLENS AI ORB ===== -->
+  <div class="nl-ai-orb-container" id="nlAiOrbContainer">
+    <div class="nl-ai-orb-tooltip" id="nlAiOrbTooltip">
+      <span class="nl-ai-orb-status" id="nlAiOrbStatus">NeuroLens AI Ready</span>
+    </div>
+    <div class="nl-ai-orb" id="nlAiOrb">
+      <div class="nl-ai-orb-core"></div>
+      <div class="nl-ai-orb-ring"></div>
+      <div class="nl-ai-orb-particle p1"></div>
+      <div class="nl-ai-orb-particle p2"></div>
+    </div>
+    
+    <!-- Floating Info Panel -->
+    <div class="nl-ai-panel" id="nlAiPanel">
+      <div class="nl-ai-panel-header">
+        <span class="nl-ai-panel-title">🧠 NeuroLens AI Companion</span>
+        <button class="nl-ai-panel-close" id="nlAiPanelClose">&times;</button>
+      </div>
+      <div class="nl-ai-panel-content">
+        <div class="nl-ai-stat-row">
+          <span class="nl-ai-stat-label">Active Mode:</span>
+          <span class="nl-ai-stat-val" id="nlAiPanelMode">Emotion Detection</span>
+        </div>
+        <div class="nl-ai-stat-row">
+          <span class="nl-ai-stat-label">AI Status:</span>
+          <span class="nl-ai-stat-val" id="nlAiPanelStatus">Ready for expressions</span>
+        </div>
+        <div class="nl-ai-stat-row">
+          <span class="nl-ai-stat-label">System Health:</span>
+          <span class="nl-ai-stat-val green">● Optimal (60 FPS)</span>
+        </div>
+        <div class="nl-ai-tips">
+          <div class="nl-ai-tip-header">💡 Accessibility Tip</div>
+          <div class="nl-ai-tip-body" id="nlAiPanelTip">Focus Mode highlights your active panel to minimize peripheral visual distractions.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- YouTube Modal Overlay -->
+  <div class="cz-video-modal" id="czVideoModal">
+    <div class="cz-video-modal-card">
+      <div class="cz-video-modal-header">
+        <span class="cz-video-modal-title" id="czVideoModalTitle">Relaxing Video</span>
+        <button class="cz-video-modal-close" id="czVideoModalClose">&times;</button>
+      </div>
+      <div class="cz-video-modal-body">
+        <iframe id="czVideoModalIframe" src="" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js?v=28"></script>
 </body>
 
 </html>

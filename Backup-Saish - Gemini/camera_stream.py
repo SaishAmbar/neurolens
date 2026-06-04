@@ -1,22 +1,6 @@
 """
 camera_stream.py — Pi Zero 2W + Camera Module 3 (IMX708)
 
-FIXES applied:
-  1. LAG     — Drop to 320x240 for zero-lag on Zero 2W; use video pipeline
-               with low framerate cap; drop buffer_count to 2
-  2. COLORS  — Capture in BGR888 (what picamera2 actually gives OpenCV),
-               then encode directly via cv2.imencode so browser sees correct colors
-  3. FLIP    — Transform(hflip=True) at ISP level (zero CPU cost) is the
-               sole horizontal flip. cv2.flip removed — applying BOTH caused a
-               double-inversion that made the stream appear as a mirrored laptop cam.
-  4. CORS    — flask_cors CORS(app) covers all routes by default, but the MJPEG
-               /stream route also gets explicit after_request headers as a belt-and-
-               suspenders fix. The browser's crossOrigin='anonymous' on the <img>
-               tag will only work if the server returns Access-Control-Allow-Origin.
-               Without this header the canvas gets tainted and drawImage() silently
-               fails, making the Pi feed appear blank (or shows the laptop webcam
-               frame that was there before switching).
-
 Run on Pi:
   python3 camera_stream.py
 """
@@ -33,10 +17,10 @@ from flask_cors import CORS
 # ──────────────────────────────────────────────────────────────────────────────
 # TUNING — adjust these for your scene
 # ──────────────────────────────────────────────────────────────────────────────
-STREAM_W      = 320          # width  — 320×240 is lag-free on Zero 2W
-STREAM_H      = 240          # height
-STREAM_FPS    = 15           # target framerate — 15fps is smooth & sustainable
-JPEG_QUALITY  = 60           # 60 is plenty for monitoring; lower = less lag
+STREAM_W      = 640          # width
+STREAM_H      = 480          # height
+STREAM_FPS    = 30           # target framerate
+JPEG_QUALITY  = 80           # higher quality
 PORT          = 5001
 HOST          = '0.0.0.0'
 # ──────────────────────────────────────────────────────────────────────────────
@@ -73,15 +57,10 @@ def camera_capture_loop():
 
     picam2 = Picamera2()
 
-    # Use "BGR888" format — this is what OpenCV expects natively.
-    # Despite the confusing name, picamera2 BGR888 gives correct RGB output
-    # when encoded to JPEG via cv2.imencode (which expects BGR input).
     config = picam2.create_video_configuration(
-        main={"size": (STREAM_W, STREAM_H), "format": "BGR888"},
+        main={"size": (STREAM_W, STREAM_H), "format": "RGB888"},
         controls={"FrameDurationLimits": (int(1e6 // STREAM_FPS),
                                           int(1e6 // STREAM_FPS))},
-        transform=Transform(hflip=True),   # ISP-level mirror — zero CPU cost
-        buffer_count=2,                    # minimal buffers = less latency
     )
     picam2.configure(config)
     picam2.start()
@@ -103,18 +82,14 @@ def camera_capture_loop():
     jpeg_params  = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
 
     while True:
-        # capture_array() returns a NumPy array in BGR888 format as configured.
-        frame_bgr = picam2.capture_array()
+        frame_rgb = picam2.capture_array()
+        
+        # Convert RGB to BGR for OpenCV
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        
+        # Flip frame horizontally
+        frame_bgr = cv2.flip(frame_bgr, 1)
 
-        # FIX: REMOVED cv2.flip(frame_bgr, 1) — the ISP-level Transform(hflip=True)
-        # above already mirrors the frame at zero CPU cost before it leaves the sensor.
-        # Applying cv2.flip() on top of that was a double-inversion: the result looked
-        # correct on the Pi locally but appeared as a mirrored image in the browser,
-        # making it indistinguishable from a laterally-inverted laptop webcam feed.
-        # Rule: use ONE flip method. Transform(hflip=True) is preferred (ISP-level,
-        # no CPU cost). cv2.flip is a fallback if Transform is unavailable.
-
-        # cv2.imencode expects BGR — frame_bgr is already BGR, so encode directly.
         ret, jpeg = cv2.imencode('.jpg', frame_bgr, jpeg_params)
         if ret:
             with latest_frame_lock:
@@ -200,10 +175,9 @@ def health():
         'resolution':  f'{STREAM_W}×{STREAM_H}',
         'fps_target':  STREAM_FPS,
         'jpeg_quality': JPEG_QUALITY,
-        'color_fix':   'BGR888 + cv2.imencode (correct JPEG colors)',
-        # FIX: reflects single-flip approach — ISP hflip only, no cv2.flip
-        'flip_fix':    'Transform(hflip=True) at ISP level only (no double-flip)',
-        'cors':        'Access-Control-Allow-Origin: * (flask_cors + after_request)',
+        'color_fix':   'RGB888 converted to BGR',
+        'flip_fix':    'cv2.flip',
+        'cors':        'Access-Control-Allow-Origin: *',
     })
 
 
@@ -213,9 +187,6 @@ if __name__ == '__main__':
     log.info("  NeuroLens — Pi Zero 2W Camera Stream")
     log.info(f"  Resolution : {STREAM_W}×{STREAM_H} @ {STREAM_FPS}fps")
     log.info(f"  JPEG quality: {JPEG_QUALITY}%")
-    log.info(f"  Color fix  : BGR888 → cv2.imencode (no channel swap)")
-    log.info(f"  Flip fix   : ISP hflip ONLY (cv2.flip removed — was double-inverting)")
-    log.info(f"  CORS fix   : Access-Control-Allow-Origin: * on all routes")
     log.info(f"  Stream     : http://[pi-ip]:{PORT}/stream")
     log.info("=" * 55)
     app.run(host=HOST, port=PORT, threaded=True)

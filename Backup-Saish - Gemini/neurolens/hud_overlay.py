@@ -26,7 +26,7 @@ class HUDOverlay:
     #  PUBLIC API
     # ══════════════════════════════════════════════════════════════════════
 
-    def render(self, frame, distance_results, fps=0.0):
+    def render(self, frame, distance_results, fps=0.0, mode='navigation'):
         """
         Render the complete HUD overlay onto the frame.
 
@@ -34,6 +34,7 @@ class HUDOverlay:
             frame: BGR image (will be modified in-place)
             distance_results: List of DistanceResult objects (sorted by danger)
             fps: Current frames per second
+            mode: 'navigation' or 'desktop'
 
         Returns:
             The modified frame
@@ -47,31 +48,41 @@ class HUDOverlay:
         most_dangerous = distance_results[0] if distance_results else None
         alert_zone = most_dangerous.zone if most_dangerous else config.ZONE_SAFE
 
-        # ── Layer 1: Background effects ───────────────────────────────────
+        # ── Layer 1: Background grid and safe corridor ────────────────────
         self._draw_grid(frame, w, h)
+        if len(distance_results) == 0 and mode == 'navigation':
+            self._draw_safe_corridor(frame, w, h, t)
+        elif mode == 'desktop':
+            # Draw desktop crosshair scanning overlay in background
+            cv2.circle(frame, (w // 2, h // 2), 80, (255, 229, 0), 1, cv2.LINE_AA)
+            cv2.circle(frame, (w // 2, h // 2), 160, (255, 229, 0), 1, cv2.LINE_AA)
+            cv2.line(frame, (w // 2 - 200, h // 2), (w // 2 + 200, h // 2), (255, 229, 0), 1, cv2.LINE_AA)
+            cv2.line(frame, (w // 2, h // 2 - 150), (w // 2, h // 2 + 150), (255, 229, 0), 1, cv2.LINE_AA)
+
+        # ── Layer 2: Scan line ────────────────────────────────────────────
         self._draw_scan_line(frame, w, h, t)
 
-        # ── Layer 2: Detection overlays ───────────────────────────────────
-        for i, result in enumerate(distance_results):
+        # ── Layer 3: Draw all detections (primary on top) ─────────────────
+        for i in range(len(distance_results) - 1, -1, -1):
             is_primary = (i == 0)
-            self._draw_detection_box(frame, result, is_primary, t)
+            self._draw_detection_box(frame, distance_results[i], is_primary, t)
 
-        # ── Layer 3: Danger flash (if VERY CLOSE) ────────────────────────
+        # ── Layer 4: Danger flash (if VERY CLOSE) ────────────────────────
         if alert_zone == config.ZONE_VERY_CLOSE:
             self._draw_danger_flash(frame, w, h, t)
 
-        # ── Layer 4: HUD frame elements ──────────────────────────────────
+        # ── Layer 5: HUD frame elements ──────────────────────────────────
         self._draw_corner_brackets(frame, w, h, alert_zone)
         self._draw_header(frame, w, t)
-        self._draw_warning_panel(frame, w, most_dangerous, t)
-        self._draw_direction_indicators(frame, w, h, most_dangerous, t)
-        self._draw_stats_footer(frame, w, h, len(distance_results))
-        self._draw_distance_legend(frame, w, h)
+        self._draw_warning_panel(frame, w, most_dangerous, t, mode)
+        self._draw_direction_indicators(frame, w, h, distance_results, most_dangerous, t, mode)
+        self._draw_stats_footer(frame, w, h, len(distance_results), mode)
+        self._draw_distance_legend(frame, w, h, mode)
 
         return frame
 
     # ══════════════════════════════════════════════════════════════════════
-    #  BACKGROUND EFFECTS
+    #  BACKGROUND EFFECTS & CORRIDOR
     # ══════════════════════════════════════════════════════════════════════
 
     def _draw_grid(self, frame, w, h):
@@ -84,17 +95,46 @@ class HUDOverlay:
             cv2.line(overlay, (0, y), (w, y), config.COLOR_HUD_GRID, 1)
         cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
 
+    def _draw_safe_corridor(self, frame, w, h, t):
+        """Draw a futuristic green transparent safe corridor converging at the horizon."""
+        overlay = frame.copy()
+        
+        horizon_y = int(h * 0.4)
+        horizon_w = int(w * 0.1)
+        bottom_w = int(w * 0.5)
+        
+        pts = np.array([
+            [w // 2 - horizon_w // 2, horizon_y],
+            [w // 2 + horizon_w // 2, horizon_y],
+            [w // 2 + bottom_w // 2, h - 50],
+            [w // 2 - bottom_w // 2, h - 50]
+        ], np.int32)
+        
+        # Corridor fill
+        cv2.fillPoly(overlay, [pts], config.COLOR_SAFE)
+        cv2.addWeighted(overlay, 0.08, frame, 0.92, 0, frame)
+        
+        # Corridor borders (dashed)
+        self._draw_dashed_line(frame, (w // 2 - horizon_w // 2, horizon_y), (w // 2 - bottom_w // 2, h - 50), config.COLOR_SAFE, 2)
+        self._draw_dashed_line(frame, (w // 2 + horizon_w // 2, horizon_y), (w // 2 + bottom_w // 2, h - 50), config.COLOR_SAFE, 2)
+        
+        # Flowing safe arrow animation
+        pulse_y = int((h - 80) - ((t * 40) % 60))
+        arrow_alpha = 1.0 - ((t * 40) % 60) / 60.0
+        
+        overlay_arrow = frame.copy()
+        cv2.line(overlay_arrow, (w // 2 - 12, pulse_y + 8), (w // 2, pulse_y), config.COLOR_SAFE, 3, cv2.LINE_AA)
+        cv2.line(overlay_arrow, (w // 2 + 12, pulse_y + 8), (w // 2, pulse_y), config.COLOR_SAFE, 3, cv2.LINE_AA)
+        cv2.addWeighted(overlay_arrow, arrow_alpha * 0.5, frame, 1 - arrow_alpha * 0.5, 0, frame)
+
     def _draw_scan_line(self, frame, w, h, t):
         """Animated horizontal scan line sweeping vertically."""
-        # Scan line position cycles over 3 seconds
         cycle = (t % 3.0) / 3.0
         y = int(cycle * h)
         alpha = 0.4
 
         overlay = frame.copy()
-        # Main scan line
         cv2.line(overlay, (0, y), (w, y), config.COLOR_SCANLINE, 2)
-        # Gradient trail (5 lines above with decreasing opacity)
         for i in range(1, 8):
             trail_y = y - i * 3
             if trail_y >= 0:
@@ -108,28 +148,32 @@ class HUDOverlay:
     # ══════════════════════════════════════════════════════════════════════
 
     def _draw_detection_box(self, frame, result, is_primary, t):
-        """Draw a color-coded bounding box with tech-style corners."""
+        """Draw a color-coded bounding box with tech-style corners and distance scale ticks."""
         det = result.detection
         x, y, w, h = det.bbox
         color = result.zone_color
+        is_moving = getattr(det, "is_moving", False)
 
-        # Clamp coordinates
         x = max(0, x)
         y = max(0, y)
 
         thickness = 3 if is_primary else 2
 
-        # ── Glow effect for primary threat ────────────────────────────────
+        # ── Glow or translucent fill ──────────────────────────────────────
         if is_primary:
-            # Pulsing glow
             pulse = 0.5 + 0.5 * math.sin(t * 4)
             glow_color = tuple(int(c * pulse) for c in color)
             overlay = frame.copy()
             cv2.rectangle(overlay, (x - 3, y - 3), (x + w + 3, y + h + 3), glow_color, 4)
             cv2.addWeighted(overlay, 0.4, frame, 0.6, 0, frame)
+        else:
+            # Translucent box fill for secondary obstacles
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (x, y), (x + w, y + h), color, -1)
+            cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
 
         # ── Corner brackets instead of full rectangle ─────────────────────
-        corner_len = min(25, w // 4, h // 4)
+        corner_len = min(15, w // 4, h // 4)
 
         # Top-left
         cv2.line(frame, (x, y), (x + corner_len, y), color, thickness)
@@ -150,9 +194,17 @@ class HUDOverlay:
         self._draw_dashed_line(frame, (x, y + corner_len), (x, y + h - corner_len), color, 1)
         self._draw_dashed_line(frame, (x + w, y + corner_len), (x + w, y + h - corner_len), color, 1)
 
+        # ── Distance scale ticks (Primary threat box only) ────────────────
+        if is_primary:
+            tick_w = 6
+            for fraction in [0.25, 0.50, 0.75]:
+                ty = int(y + h * fraction)
+                cv2.line(frame, (x, ty), (x + tick_w, ty), color, 1)
+
         # ── Label tag ─────────────────────────────────────────────────────
         dist_m = result.estimated_cm / 100.0
-        label = f"{det.class_name.upper()} | {result.zone} | {dist_m:.1f}m"
+        moving_suffix = " | MOVING" if is_moving else ""
+        label = f"{det.class_name.upper()}{moving_suffix} | {result.zone} | {dist_m:.1f}m"
         conf_label = f"{det.confidence * 100:.0f}%"
 
         # Label background
@@ -160,7 +212,6 @@ class HUDOverlay:
         label_x = x
         label_y = max(y - 10, label_h + 10)
 
-        # Semi-transparent label background
         overlay = frame.copy()
         cv2.rectangle(
             overlay,
@@ -184,18 +235,22 @@ class HUDOverlay:
         cv2.putText(frame, label, (label_x + 2, label_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
 
-        # Confidence on right side
+        # Confidence on bottom right
         (conf_w, conf_h), _ = cv2.getTextSize(conf_label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
         cv2.putText(frame, conf_label, (x + w - conf_w, y + h + conf_h + 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
 
-        # ── Center crosshair on primary ───────────────────────────────────
+        # ── Center crosshair and velocity vectors ──────────────────────────
         if is_primary:
             cx, cy = det.center_x, det.center_y
             cross_size = 10
             cv2.line(frame, (cx - cross_size, cy), (cx + cross_size, cy), color, 1, cv2.LINE_AA)
             cv2.line(frame, (cx, cy - cross_size), (cx, cy + cross_size), color, 1, cv2.LINE_AA)
             cv2.circle(frame, (cx, cy), cross_size + 2, color, 1, cv2.LINE_AA)
+
+            # Velocity vector arrow for moving items
+            if is_moving:
+                cv2.arrowedLine(frame, (cx, cy), (cx + 25, cy - 15), (0, 0, 255), 2, cv2.LINE_AA, tipLength=0.3)
 
     @staticmethod
     def _draw_dashed_line(frame, pt1, pt2, color, thickness, dash_length=8):
@@ -235,7 +290,6 @@ class HUDOverlay:
         cv2.rectangle(vignette, (0, 0), (w, h), config.COLOR_DANGER_FLASH, -1)
 
         # Create radial gradient mask (dark at center, bright at edges)
-        mask = np.zeros((h, w), dtype=np.float32)
         cy, cx = h // 2, w // 2
         max_dist = math.sqrt(cx ** 2 + cy ** 2)
         Y, X = np.ogrid[:h, :w]
@@ -274,7 +328,6 @@ class HUDOverlay:
 
     def _draw_header(self, frame, w, t):
         """Draw NEUROLENS branding and timestamp at top."""
-        # ── Top-left: Branding ────────────────────────────────────────────
         # Blinking dot
         dot_visible = int(t * 2) % 2 == 0
         if dot_visible:
@@ -288,7 +341,6 @@ class HUDOverlay:
                     cv2.FONT_HERSHEY_SIMPLEX, config.HUD_FONT_SCALE_SMALL,
                     config.COLOR_HUD_ACCENT, 1, cv2.LINE_AA)
 
-        # ── Top-right: FPS + Timestamp ────────────────────────────────────
         fps_text = f"FPS: {self._fps:.0f}"
         timestamp = time.strftime("%H:%M:%S")
 
@@ -302,21 +354,56 @@ class HUDOverlay:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                     config.COLOR_HUD_TEXT, 1, cv2.LINE_AA)
 
-    def _draw_warning_panel(self, frame, w, most_dangerous, t):
-        """Draw the central warning panel at top-center."""
+    def _get_warning_text_and_icon(self, most_dangerous, mode='navigation'):
+        """Helper to resolve standardized navigation labels for HUD rendering."""
         if most_dangerous is None:
-            zone = config.ZONE_SAFE
-            obj_name = ""
-            direction = ""
-        else:
-            zone = most_dangerous.zone
-            obj_name = most_dangerous.detection.class_name.upper()
-            direction = most_dangerous.direction
+            label = "DESK AREA CLEAR" if mode == 'desktop' else "SAFE PATH"
+            icon = "OK"
+            return label, icon, config.COLOR_SAFE
 
-        zone_info = config.ZONE_INFO[zone]
-        color = zone_info["color"]
-        label = zone_info["label"]
-        icon = zone_info["icon"]
+        det = most_dangerous.detection
+        zone = most_dangerous.zone
+        color = most_dangerous.zone_color
+
+        icon = "WARN"
+        label = "OBJECT AHEAD"
+
+        if mode == 'desktop':
+            if zone == config.ZONE_VERY_CLOSE:
+                label = f"CLOSE: {det.class_name.upper()}"
+                icon = "STOP"
+            else:
+                label = f"DETECTED: {det.class_name.upper()}"
+                icon = "FIND"
+        else:
+            if det.class_name == "wall":
+                label = "DANGER: WALL CLOSE"
+                icon = "STOP"
+            elif det.class_name == "step down / stairs":
+                label = "STEP DOWN"
+                icon = "LEVEL"
+            elif zone == config.ZONE_VERY_CLOSE and det.estimated_cm < 50:
+                label = "DANGER: STOP"
+                icon = "STOP"
+            elif zone == config.ZONE_VERY_CLOSE:
+                label = "WARNING: OBJECT CLOSE"
+                icon = "ALERT"
+            elif most_dangerous.direction == "LEFT":
+                label = "MOVE RIGHT"
+                icon = "RIGHT"
+            elif most_dangerous.direction == "RIGHT":
+                label = "MOVE LEFT"
+                icon = "LEFT"
+            elif most_dangerous.direction == "CENTER":
+                label = "OBJECT AHEAD"
+                icon = "WARN"
+
+        return label, icon, color
+
+    def _draw_warning_panel(self, frame, w, most_dangerous, t, mode='navigation'):
+        """Draw the central warning panel at top-center."""
+        label, icon, color = self._get_warning_text_and_icon(most_dangerous, mode)
+        zone = most_dangerous.zone if most_dangerous else config.ZONE_SAFE
 
         # Panel dimensions
         panel_w = 340
@@ -338,62 +425,71 @@ class HUDOverlay:
             cv2.rectangle(frame, (px, py), (px + panel_w, py + panel_h), color, 1)
 
         # Alert text
-        alert_text = f"{icon} {label}"
-        (text_w, text_h), _ = cv2.getTextSize(alert_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+        alert_text = f"[{icon}] {label}"
+        (text_w, text_h), _ = cv2.getTextSize(alert_text, cv2.FONT_HERSHEY_SIMPLEX, 0.50, 2)
         text_x = px + (panel_w - text_w) // 2
         cv2.putText(frame, alert_text, (text_x, py + 25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.50, color, 2, cv2.LINE_AA)
 
         # Object info line
-        if obj_name:
-            info_text = f"{obj_name} - {direction}"
+        if most_dangerous:
+            info_text = f"{most_dangerous.detection.class_name.upper()} - {most_dangerous.direction}"
             (info_w, _), _ = cv2.getTextSize(info_text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
             info_x = px + (panel_w - info_w) // 2
             cv2.putText(frame, info_text, (info_x, py + 45),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, config.COLOR_HUD_TEXT, 1, cv2.LINE_AA)
 
-    def _draw_direction_indicators(self, frame, w, h, most_dangerous, t):
-        """Draw LEFT | CENTER | RIGHT direction indicators at the bottom."""
+    def _draw_direction_indicators(self, frame, w, h, results, most_dangerous, t, mode='navigation'):
+        """Draw LEFT | CENTER | RIGHT direction indicators colored dynamically by threat zones."""
         bar_h = 35
         bar_y = h - bar_h - 15
         section_w = w // 3
 
         directions = ["LEFT", "CENTER", "RIGHT"]
-        arrows = ["<< LEFT", "[ CENTER ]", "RIGHT >>"]
+        arrows = ["LEFT DESK", "CENTER DESK", "RIGHT DESK"] if mode == 'desktop' else ["<< LEFT", "[ CENTER ]", "RIGHT >>"]
         active_dir = most_dangerous.direction if most_dangerous else None
+
+        # Find closest obstacle per direction
+        closest_per_dir = {"LEFT": None, "CENTER": None, "RIGHT": None}
+        for r in (results or []):
+            d = r.direction
+            if not closest_per_dir[d] or r.estimated_cm < closest_per_dir[d].estimated_cm:
+                closest_per_dir[d] = r
 
         overlay = frame.copy()
 
         for i, (dir_name, arrow) in enumerate(zip(directions, arrows)):
             sx = i * section_w
-            is_active = (dir_name == active_dir)
+            obstacle = closest_per_dir[dir_name]
 
             # Background
-            if is_active and most_dangerous:
-                bg_color = most_dangerous.zone_color
+            if obstacle:
+                bg_color = obstacle.zone_color
                 cv2.rectangle(overlay, (sx + 2, bar_y), (sx + section_w - 2, bar_y + bar_h), bg_color, -1)
             else:
                 cv2.rectangle(overlay, (sx + 2, bar_y), (sx + section_w - 2, bar_y + bar_h),
                               config.COLOR_HUD_BG, -1)
 
-        cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
+        cv2.addWeighted(overlay, 0.4, frame, 0.6, 0, frame)
 
         # Draw text and separators
         for i, (dir_name, arrow) in enumerate(zip(directions, arrows)):
             sx = i * section_w
+            obstacle = closest_per_dir[dir_name]
             is_active = (dir_name == active_dir)
 
-            text_color = (255, 255, 255) if is_active else config.COLOR_HUD_TEXT
+            if obstacle:
+                text_color = (255, 255, 255) if is_active else obstacle.zone_color
+                cv2.rectangle(frame, (sx + 2, bar_y), (sx + section_w - 2, bar_y + bar_h), obstacle.zone_color, 2 if is_active else 1)
+            else:
+                text_color = config.COLOR_HUD_TEXT
 
-            # Animated arrow for active direction
+            offset = 0
             if is_active and most_dangerous:
-                offset = int(3 * math.sin(t * 5))
                 if dir_name == "LEFT":
                     arrow = "<" * (2 + int(t * 2) % 2) + " LEFT"
                 elif dir_name == "RIGHT":
                     arrow = "RIGHT " + ">" * (2 + int(t * 2) % 2)
-            else:
-                offset = 0
 
             (tw, th), _ = cv2.getTextSize(arrow, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
             tx = sx + (section_w - tw) // 2 + offset
@@ -403,12 +499,11 @@ class HUDOverlay:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, text_color,
                         2 if is_active else 1, cv2.LINE_AA)
 
-            # Separator lines
             if i > 0:
                 cv2.line(frame, (sx, bar_y + 5), (sx, bar_y + bar_h - 5),
                          config.COLOR_HUD_GRID, 1)
 
-    def _draw_stats_footer(self, frame, w, h, detection_count):
+    def _draw_stats_footer(self, frame, w, h, detection_count, mode='navigation'):
         """Draw detection count and model info at bottom-left."""
         y_base = h - 60
 
@@ -416,20 +511,28 @@ class HUDOverlay:
                     cv2.FONT_HERSHEY_SIMPLEX, config.HUD_FONT_SCALE_LABEL,
                     config.COLOR_HUD_TEXT, 1, cv2.LINE_AA)
 
-        cv2.putText(frame, "MODEL: YOLOv4-tiny | 416x416 | 80 CLASSES", (20, y_base + 18),
+        mode_name = "Desktop Mode" if mode == 'desktop' else "Navigation Mode"
+        cv2.putText(frame, f"MODEL: YOLOv4-tiny | {mode_name}", (20, y_base + 18),
                     cv2.FONT_HERSHEY_SIMPLEX, config.HUD_FONT_SCALE_SMALL,
                     config.COLOR_HUD_ACCENT, 1, cv2.LINE_AA)
 
-    def _draw_distance_legend(self, frame, w, h):
+    def _draw_distance_legend(self, frame, w, h, mode='navigation'):
         """Draw color-coded distance legend at bottom-right."""
         legend_x = w - 180
         legend_y = h - 80
 
-        items = [
-            (config.COLOR_SAFE, "SAFE (>3m)"),
-            (config.COLOR_NEAR, "NEAR (1.5-3m)"),
-            (config.COLOR_VERY_CLOSE, "V.CLOSE (<1.5m)"),
-        ]
+        if mode == 'desktop':
+            items = [
+                (config.COLOR_SAFE, "SAFE (>0.6m)"),
+                (config.COLOR_NEAR, "NEAR (0.3-0.6m)"),
+                (config.COLOR_VERY_CLOSE, "V.CLOSE (<0.3m)"),
+            ]
+        else:
+            items = [
+                (config.COLOR_SAFE, "SAFE (>2.0m)"),
+                (config.COLOR_NEAR, "NEAR (1.0-2.0m)"),
+                (config.COLOR_VERY_CLOSE, "V.CLOSE (<1.0m)"),
+            ]
 
         for i, (color, text) in enumerate(items):
             y = legend_y + i * 18

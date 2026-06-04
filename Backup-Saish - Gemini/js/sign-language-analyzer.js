@@ -28,6 +28,10 @@ export class SignLanguageAnalyzer {
     this.lastConfirmedWord = null;
     this.confirmedHoldFrames = 0;
     this.confirmedHoldMax = 30;       // show "Word Confirmed" for ~1s
+
+    // Prediction smoothing history
+    this.predictionHistory = [];
+    this.smoothingWindowSize = 5;
   }
 
   analyze(handsLandmarks, handedness, timestamp) {
@@ -35,6 +39,7 @@ export class SignLanguageAnalyzer {
 
     // ── No hands ──
     if (!hasHands) {
+      this.predictionHistory = []; // Reset history when hands leave
       this.motion.update(null, timestamp);
       this.wordEngine.update(null, 0, true, timestamp, false);
 
@@ -63,8 +68,11 @@ export class SignLanguageAnalyzer {
       alts = matches.slice(1, 4).map(m => m.sign).filter(s => s !== 'UNCLEAR');
     }
 
+    // Smooth prediction to filter out transient fluctuations
+    const smoothed = this._getSmoothedPrediction(bestSign, bestConf);
+
     // Word engine — handles stability, locking, cooldown
-    this.wordEngine.update(bestSign, bestConf, motionResult.isPause, timestamp, true);
+    this.wordEngine.update(smoothed.sign, smoothed.confidence, motionResult.isPause, timestamp, true);
 
     const completedWord = this.wordEngine.getCompletedWord();
     if (completedWord) {
@@ -73,18 +81,70 @@ export class SignLanguageAnalyzer {
 
     return this._buildResult({
       detected: true,
-      bestSign,
-      bestConf,
+      bestSign: smoothed.sign,
+      bestConf: smoothed.confidence,
       alts,
       timestamp,
     });
   }
 
+  _getSmoothedPrediction(sign, confidence) {
+    // Add to history
+    this.predictionHistory.push({ sign, confidence });
+    if (this.predictionHistory.length > this.smoothingWindowSize) {
+      this.predictionHistory.shift();
+    }
+
+    // Count frequencies of each sign in history
+    const counts = {};
+    const totalConf = {};
+    for (const item of this.predictionHistory) {
+      const s = item.sign || 'UNCLEAR';
+      counts[s] = (counts[s] || 0) + 1;
+      totalConf[s] = (totalConf[s] || 0) + item.confidence;
+    }
+
+    // Find the sign with the highest frequency
+    let bestSign = 'UNCLEAR';
+    let maxCount = 0;
+    let maxConfSum = 0;
+
+    for (const s in counts) {
+      if (counts[s] > maxCount) {
+        maxCount = counts[s];
+        bestSign = s;
+        maxConfSum = totalConf[s];
+      } else if (counts[s] === maxCount) {
+        // Break ties with higher average confidence
+        if (totalConf[s] > maxConfSum) {
+          bestSign = s;
+          maxConfSum = totalConf[s];
+        }
+      }
+    }
+
+    const avgConfidence = maxCount > 0 ? Math.round(maxConfSum / maxCount) : 0;
+
+    return {
+      sign: bestSign === 'UNCLEAR' ? null : bestSign,
+      confidence: avgConfidence
+    };
+  }
+
   _addWord(wordObj) {
     this.lastConfirmedWord = wordObj.word;
     this.confirmedHoldFrames = this.confirmedHoldMax;
+
+    // Auto-insert "NEED" if user signs "I" followed by "WATER"
+    if (wordObj.word === 'WATER' && this.recognizedWords.length > 0 && this.recognizedWords[this.recognizedWords.length - 1] === 'I') {
+      this.recognizedWords.push('NEED');
+    }
+
     this.recognizedWords.push(wordObj.word);
-    if (this.recognizedWords.length > this.maxHistory) this.recognizedWords.shift();
+    
+    while (this.recognizedWords.length > this.maxHistory) {
+      this.recognizedWords.shift();
+    }
   }
 
   _buildResult(opts) {
@@ -115,10 +175,10 @@ export class SignLanguageAnalyzer {
       state = 'idle';
     }
 
-    // Show locked word or current best sign
-    const displaySign = isLocked
-      ? { sign: this.wordEngine.getLockedWord(), confidence: 99 }
-      : (bestSign ? { sign: bestSign, confidence: bestConf } : null);
+    // Show locked word, confirmed word, or current stabilizing candidate
+    const displaySign = (isLocked || this.confirmedHoldFrames > 0)
+      ? { sign: isLocked ? this.wordEngine.getLockedWord() : this.lastConfirmedWord, confidence: 99 }
+      : (forming ? { sign: forming, confidence: Math.round(progress * 100) } : null);
 
     return {
       detected,
@@ -129,8 +189,8 @@ export class SignLanguageAnalyzer {
       forming_progress: progress,
       sentence: this.recognizedWords.join('  →  '),
       gloss: '',
-      alternatives: isLocked ? [] : alts,
-      word_confidence: bestConf > 0 ? `${bestConf}%` : '—',
+      alternatives: [],
+      word_confidence: (isLocked || this.confirmedHoldFrames > 0) ? '99%' : (forming ? `${Math.round(progress * 100)}%` : '—'),
       sentence_confidence: '—',
       status,
       state,
@@ -155,5 +215,6 @@ export class SignLanguageAnalyzer {
     this.recognizedWords = [];
     this.lastConfirmedWord = null;
     this.confirmedHoldFrames = 0;
+    this.predictionHistory = [];
   }
 }

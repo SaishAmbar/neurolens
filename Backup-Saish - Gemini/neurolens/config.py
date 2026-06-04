@@ -18,86 +18,46 @@ YOLO_WEIGHTS_PATH = os.path.join(MODELS_DIR, "yolov4-tiny.weights")
 COCO_NAMES_PATH = os.path.join(MODELS_DIR, "coco.names")
 
 # ─── Detection ────────────────────────────────────────────────────────────────
-CONFIDENCE_THRESHOLD = 0.35
+CONFIDENCE_THRESHOLD = 0.25   # Lowered to 0.25 — improves detection of fans and partial obstacles
 NMS_THRESHOLD = 0.4
 INPUT_SIZE = (416, 416)
 
-# COCO class indices that are relevant obstacles
-# Includes all 80 COCO classes for comprehensive detection
+# COCO class indices that are relevant obstacles (Navigation-only Whitelist)
 OBSTACLE_CLASSES = {
     0: "person",
     1: "bicycle",
     2: "car",
     3: "motorbike",
-    4: "aeroplane",
     5: "bus",
-    6: "train",
     7: "truck",
-    8: "boat",
-    9: "traffic light",
     10: "fire hydrant",
     11: "stop sign",
-    12: "parking meter",
     13: "bench",
-    14: "bird",
-    15: "cat",
-    16: "dog",
-    17: "horse",
-    18: "sheep",
-    19: "cow",
-    20: "elephant",
-    21: "bear",
-    22: "zebra",
-    23: "giraffe",
     24: "backpack",
     25: "umbrella",
     26: "handbag",
-    27: "tie",
     28: "suitcase",
-    29: "frisbee",
-    30: "skis",
-    31: "snowboard",
-    32: "sports ball",
-    33: "kite",
-    34: "baseball bat",
-    35: "baseball glove",
-    36: "skateboard",
-    37: "surfboard",
-    38: "tennis racket",
-    39: "bottle",
-    40: "wine glass",
-    41: "cup",
-    42: "fork",
-    43: "knife",
-    44: "spoon",
-    45: "bowl",
-    46: "banana",
-    47: "apple",
-    48: "sandwich",
-    49: "orange",
-    50: "broccoli",
-    51: "carrot",
-    52: "hot dog",
-    53: "pizza",
-    54: "donut",
-    55: "cake",
     56: "chair",
     57: "sofa",
     58: "pottedplant",
     59: "bed",
     60: "diningtable",
-    61: "toilet",
-    62: "tv",
+    72: "refrigerator",
+    74: "clock",
+}
+
+# COCO class indices that are relevant in Desktop mode (small/office items)
+DESKTOP_CLASSES = {
+    39: "bottle",
+    40: "wine glass",
+    41: "cup",
+    43: "knife",
+    45: "bowl",
     63: "laptop",
     64: "mouse",
     65: "remote",
     66: "keyboard",
     67: "cell phone",
-    68: "microwave",
-    69: "oven",
-    70: "toaster",
-    71: "sink",
-    72: "refrigerator",
     73: "book",
     74: "clock",
     75: "vase",
@@ -107,105 +67,125 @@ OBSTACLE_CLASSES = {
     79: "toothbrush",
 }
 
+# Mapping of raw classes to navigation-friendly terms
+NAVIGATION_CLASS_MAP = {
+    "person": "person",
+    "wall": "wall",
+    "chair": "chair",
+    "sofa": "couch",
+    "diningtable": "table",
+    "bench": "bench",
+    "car": "vehicle",
+    "bus": "vehicle",
+    "truck": "vehicle",
+    "motorbike": "scooter/bike",
+    "bicycle": "scooter/bike",
+    "backpack": "bag on floor",
+    "handbag": "bag on floor",
+    "suitcase": "bag on floor",
+    "refrigerator": "cupboard/closet",
+    "bed": "large obstacle",
+    "clock": "fan/clock",
+    "umbrella": "umbrella",
+    "pottedplant": "potted plant",
+    "stop sign": "stop sign",
+    "fire hydrant": "fire hydrant",
+    "large obstacle": "large obstacle",
+    "pole/pillar": "pole/pillar",
+    "step down / stairs": "step down / stairs"
+}
+
+# Mapping of raw classes to desktop-friendly terms
+DESKTOP_CLASS_MAP = {
+    "toothbrush": "pen/toothbrush",
+    "scissors": "scissors/spectacles",
+    "knife": "knife",
+    "wine glass": "glass/cup",
+    "cup": "cup/headset",
+    "teddy bear": "headset/toy",
+    "mouse": "mouse",
+    "keyboard": "keyboard",
+    "cell phone": "cell phone",
+    "remote": "remote",
+    "book": "book",
+    "bottle": "bottle",
+    "bowl": "bowl/spectacles",
+    "laptop": "laptop",
+    "vase": "vase",
+    "clock": "clock",
+}
+
+# ─── Tracking & Cooldown Tuning ───────────────────────────────────────────────
+DETECTION_HOLD_FRAMES = 15      # grace period for anti-flicker (~500ms at 30fps)
+DETECTION_CONFIRM_FRAMES = 3   # consecutive detections required to confirm
+WARNING_COOLDOWN_S = 3.0       # repeat alert cooldown in seconds
+MOTION_VELOCITY_THRESHOLD = 12 # pixels per frame to trigger moving state
+MAX_DISTANCE_CM = 300          # ignore obstacles > 3 meters away
+
 # ─── Distance Estimation ─────────────────────────────────────────────────────
 # Known real-world heights in centimeters (approximate)
+# These are the VISIBLE heights YOLO tends to detect — slightly conservative
 KNOWN_HEIGHTS_CM = {
-    "person": 90,       # Upper-body/torso height (webcam rarely sees full body)
-    "car": 150,
-    "bicycle": 100,
-    "motorbike": 110,
-    "aeroplane": 400,
-    "bus": 300,
-    "train": 350,
-    "truck": 350,
-    "boat": 150,
-    "traffic light": 100,
-    "fire hydrant": 50,
-    "stop sign": 75,
-    "parking meter": 120,
-    "bench": 85,
-    "bird": 20,
-    "cat": 30,
-    "dog": 60,
-    "horse": 160,
-    "sheep": 70,
-    "cow": 140,
-    "elephant": 300,
-    "bear": 150,
-    "zebra": 140,
-    "giraffe": 500,
-    "backpack": 50,
-    "umbrella": 100,
-    "handbag": 35,
-    "tie": 50,
-    "suitcase": 60,
-    "frisbee": 3,
-    "skis": 170,
-    "snowboard": 150,
-    "sports ball": 22,
-    "kite": 80,
-    "baseball bat": 90,
-    "baseball glove": 25,
-    "skateboard": 15,
-    "surfboard": 200,
-    "tennis racket": 70,
-    "bottle": 25,
-    "wine glass": 20,
-    "cup": 12,
-    "fork": 20,
-    "knife": 25,
-    "spoon": 18,
-    "bowl": 10,
-    "banana": 20,
-    "apple": 8,
-    "sandwich": 8,
-    "orange": 8,
-    "broccoli": 15,
-    "carrot": 20,
-    "hot dog": 5,
-    "pizza": 5,
-    "donut": 8,
-    "cake": 15,
-    "chair": 90,
-    "sofa": 85,
-    "pottedplant": 40,
-    "bed": 60,
+    "person": 170,          # Full standing adult
+    "wall": 200,
+    "refrigerator": 180,
+    "cupboard/closet": 180,
+    "chair": 90,            # Full chair with backrest (~90cm)
+    "sofa": 85,             # Sofa visible height
+    "couch": 85,
+    "bench": 50,
     "diningtable": 75,
-    "toilet": 40,
-    "tv": 50,
-    "laptop": 25,
-    "mouse": 4,
-    "remote": 20,
+    "car": 150,
+    "bus": 300,
+    "truck": 250,
+    "motorbike": 110,
+    "bicycle": 95,
+    "backpack": 50,
+    "handbag": 35,
+    "suitcase": 65,
+    "clock": 60,
+    "fan/clock": 60,
+    "umbrella": 80,
+    "pottedplant": 60,
+    "potted plant": 60,
+    "stop sign": 150,
+    "fire hydrant": 90,
+    "large obstacle": 180,
+    "pole/pillar": 210,
+    "step down / stairs": 20,
+    # Small desktop items
+    "pen/toothbrush": 18,
+    "scissors/spectacles": 18,
+    "glass/cup": 10,
+    "cup/headset": 10,
+    "headset/toy": 18,
+    "mouse": 5,
     "keyboard": 5,
     "cell phone": 15,
-    "microwave": 30,
-    "oven": 60,
-    "toaster": 20,
-    "sink": 25,
-    "refrigerator": 170,
-    "book": 25,
-    "clock": 30,
+    "remote": 15,
+    "book": 22,
+    "bottle": 25,
+    "bowl/spectacles": 8,
+    "laptop": 25,
     "vase": 30,
-    "scissors": 20,
-    "teddy bear": 40,
-    "hair drier": 25,
-    "toothbrush": 18,
+    "clock": 15,
 }
 
 # Estimated focal length in pixels for a typical 720p webcam with ~78° FOV
-# focal_length ≈ (image_width / 2) / tan(FOV/2) ≈ (1280/2) / tan(39°) ≈ 790
-# Tuned down further to account for partial object visibility at close range
-FOCAL_LENGTH_PX = 550
+FOCAL_LENGTH_PX = 580   # Slightly raised — compensates for real-world lens variation
 
 # Distance zone thresholds (in centimeters)
-DIST_VERY_CLOSE_CM = 150   # < 1.5m
-DIST_NEAR_CM = 300          # 1.5m - 3m
-# > 3m = SAFE
+DIST_VERY_CLOSE_CM = 100   # < 1.0m  → WARNING
+DIST_NEAR_CM = 200          # 1.0m – 2.0m → OBJECT AHEAD
+# > 2.0m = SAFE
 
 # Fallback: bbox height as fraction of frame height
-BBOX_VERY_CLOSE_RATIO = 0.50   # bbox covers > 50% of frame height
-BBOX_NEAR_RATIO = 0.25         # bbox covers 25-50%
-# < 25% = SAFE
+# Raised VERY_CLOSE ratio so a close person doesn't auto-escalate to VERY CLOSE
+# based purely on frame coverage (e.g. face filling frame)
+BBOX_VERY_CLOSE_RATIO = 0.60   # bbox covers > 60% of frame height
+BBOX_NEAR_RATIO = 0.30         # bbox covers 30-60%
+# < 30% = SAFE
+# < 30% = SAFE
 
 # ─── Colors (BGR for OpenCV) ─────────────────────────────────────────────────
 COLOR_SAFE = (128, 255, 0)       # Neon green

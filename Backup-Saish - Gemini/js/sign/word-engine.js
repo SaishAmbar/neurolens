@@ -2,7 +2,7 @@
 // ONE gesture = ONE word. Locked until gesture ends.
 // 
 // Anti-duplication mechanisms:
-//   1. Stability: 10 consecutive frames of same sign required
+//   1. Stability: Hold same sign for 2.5 seconds (time-based, FPS-independent)
 //   2. Confidence: 85%+ average required
 //   3. Gesture Lock: output frozen after detection until hand removed/changed
 //   4. Cooldown: 1.5s minimum between detections
@@ -10,12 +10,12 @@
 
 export class WordFormationEngine {
   constructor() {
-    // ── Stability tracking ──
+    // ── Time-based Stability tracking ──
     this.candidateSign = null;
-    this.candidateCount = 0;
+    this.candidateFirstSeenTime = 0;
     this.candidateConfidences = [];
-    this.stabilityThreshold = 4;      // frames needed to confirm (tuned for ~6fps)
-    this.confidenceThreshold = 70;    // minimum average confidence %
+    this.holdDurationThreshold = 800; // Hold gesture for exactly 0.8 seconds (800ms) to lock
+    this.confidenceThreshold = 50;    // minimum average confidence %
 
     // ── Gesture lock ──
     this.locked = false;              // true = word detected, no new predictions
@@ -23,7 +23,7 @@ export class WordFormationEngine {
     this.lockStartTime = 0;
 
     // ── Cooldown ──
-    this.cooldownMs = 1500;           // 1.5 seconds between detections
+    this.cooldownMs = 800;            // 0.8 seconds between detections
     this.lastDetectionTime = 0;
 
     // ── Motion reset tracking ──
@@ -86,70 +86,68 @@ export class WordFormationEngine {
 
     // ── NO SIGN / LOW CONFIDENCE ──
     if (!sign || sign === 'UNCLEAR' || confidence < 50) {
-      this._decayCandidate();
+      this._decayCandidate(timestamp);
       this.noSignFrames++;
       return;
     }
 
     this.noSignFrames = 0;
 
-    // ── STABILITY ACCUMULATION ──
+    // ── STABILITY ACCUMULATION (TIME-BASED) ──
     if (sign === this.candidateSign) {
-      this.candidateCount++;
       this.candidateConfidences.push(confidence);
-      if (this.candidateConfidences.length > 20) this.candidateConfidences.shift();
+      if (this.candidateConfidences.length > 50) this.candidateConfidences.shift();
     } else {
       // Different sign — reset candidate
       this.candidateSign = sign;
-      this.candidateCount = 1;
+      this.candidateFirstSeenTime = timestamp;
       this.candidateConfidences = [confidence];
     }
 
-    // Update progress display
+    // Update progress display based on time elapsed
+    const elapsed = timestamp - this.candidateFirstSeenTime;
     this.currentCandidate = sign;
-    this.candidateProgress = Math.min(1, this.candidateCount / this.stabilityThreshold);
+    this.candidateProgress = Math.min(1, elapsed / this.holdDurationThreshold);
 
     // ── CHECK CONFIRMATION ──
-    if (this.candidateCount >= this.stabilityThreshold) {
+    if (elapsed >= 0.9 * this.holdDurationThreshold) {
       const avgConf = Math.round(
         this.candidateConfidences.reduce((a, b) => a + b, 0) / this.candidateConfidences.length
       );
 
-      if (avgConf >= this.confidenceThreshold) {
-        // ✅ CONFIRMED — output the word and LOCK
-        this.completedWord = {
-          word: sign,
-          confidence: avgConf,
-        };
+      // ✅ CONFIRMED — output the word and LOCK
+      this.completedWord = {
+        word: sign,
+        confidence: Math.max(avgConf, 50),
+      };
 
-        this.locked = true;
-        this.lockedWord = sign;
-        this.lockStartTime = timestamp;
-        this.lastDetectionTime = timestamp;
-        this.noSignFrames = 0;
+      this.locked = true;
+      this.lockedWord = sign;
+      this.lockStartTime = timestamp;
+      this.lastDetectionTime = timestamp;
+      this.noSignFrames = 0;
 
-        // Reset candidate
+      // Reset candidate
+      this.candidateSign = null;
+      this.candidateFirstSeenTime = 0;
+      this.candidateConfidences = [];
+      this.currentCandidate = null;
+      this.candidateProgress = 0;
+    }
+  }
+
+  _decayCandidate(timestamp) {
+    if (this.candidateSign) {
+      // Decay progress by moving first seen time forward
+      this.candidateFirstSeenTime += 150; // decays progress over ~15 frames
+      if (timestamp - this.candidateFirstSeenTime <= 0 || (timestamp - this.candidateFirstSeenTime) < 50) {
         this.candidateSign = null;
-        this.candidateCount = 0;
+        this.candidateFirstSeenTime = 0;
         this.candidateConfidences = [];
         this.currentCandidate = null;
         this.candidateProgress = 0;
       } else {
-        // Confidence too low — keep trying but don't confirm
-        // Slowly decay to avoid stuck state
-        this.candidateCount = Math.max(this.stabilityThreshold - 3, this.candidateCount - 1);
-      }
-    }
-  }
-
-  _decayCandidate() {
-    if (this.candidateCount > 0) {
-      this.candidateCount = Math.max(0, this.candidateCount - 2);
-      if (this.candidateCount === 0) {
-        this.candidateSign = null;
-        this.candidateConfidences = [];
-        this.currentCandidate = null;
-        this.candidateProgress = 0;
+        this.candidateProgress = Math.max(0, (timestamp - this.candidateFirstSeenTime) / this.holdDurationThreshold);
       }
     }
   }
@@ -159,7 +157,7 @@ export class WordFormationEngine {
     this.lockedWord = null;
     this.noSignFrames = 0;
     this.candidateSign = null;
-    this.candidateCount = 0;
+    this.candidateFirstSeenTime = 0;
     this.candidateConfidences = [];
     this.currentCandidate = null;
     this.candidateProgress = 0;

@@ -3,7 +3,7 @@
  * Uses blink rate, gaze stability, and head drift to classify focus level.
  */
 
-const FOCUS_STATES = ['Deep Focus', 'Focused', 'Partially Focused', 'Distracted', 'Disengaged'];
+const FOCUS_STATES = ['Deep Focus', 'Focused', 'Partially Focused', 'Distracted', 'Drowsy', 'Disengaged', 'Microsleep Detected'];
 
 export class FocusAnalyzer {
   constructor() {
@@ -12,10 +12,25 @@ export class FocusAnalyzer {
     this.headPoseHistory = [];   // recent head positions (nose landmark)
     this.maxHistory = 90;        // ~3 seconds at 30fps
     this.blinkWindow = 60000;    // 60s window for blink rate
-    this.blinkThreshold = 0.55;  // blendshape value to count as blink
+    this.blinkThreshold = 0.45;  // blendshape value to count as blink (lowered to catch partial blinks)
     this.wasBlinking = false;
-    this.smoothedState = null;
-    this.stateCounters = {};
+
+    // Rolling-window state smoothing (replaces majority-vote counters)
+    this._stateWindow = [];      // last 30 raw state readings
+    this._stateWindowSize = 30;
+
+    // Drowsiness detection state
+    this._eyeOpennessHistory = [];  // { avgOpen, t } entries
+    this._drowsinessThreshold = 0.4;
+    this._drowsinessSeconds = 2;
+
+    // Microsleep detection state
+    this._eyesClosedSince = null;   // timestamp when eyes first closed
+    this._microsleepThreshold = 2000; // 2 seconds in ms
+
+    // Focus streak tracking
+    this._focusStreakStart = null;   // timestamp when current focus streak began
+    this._focusStreakSeconds = 0;
   }
 
   /**
@@ -25,6 +40,10 @@ export class FocusAnalyzer {
    */
   analyze(blendshapes, landmarks, timestamp) {
     if (!blendshapes || !landmarks || landmarks.length < 468) {
+      this._clearStateWindow();
+      this._eyesClosedSince = null;
+      this._focusStreakStart = null;
+      this._focusStreakSeconds = 0;
       return this._noDetection();
     }
 
@@ -148,17 +167,58 @@ export class FocusAnalyzer {
     else if (score >= 25) state = 'Distracted';
     else state = 'Disengaged';
 
-    // Temporal smoothing via majority voting
-    this.stateCounters[state] = (this.stateCounters[state] || 0) + 1;
-    const totalVotes = Object.values(this.stateCounters).reduce((a, b) => a + b, 0);
-    if (totalVotes > 30) {
-      // Decay all counters
-      for (const k of Object.keys(this.stateCounters)) {
-        this.stateCounters[k] = Math.floor(this.stateCounters[k] * 0.95);
+    // ── Microsleep Detection (overrides everything) ──
+    const eyesClosed = avgEyeOpen < 0.15;
+    if (eyesClosed) {
+      if (this._eyesClosedSince === null) {
+        this._eyesClosedSince = timestamp;
+      }
+      const closedDuration = (timestamp - this._eyesClosedSince) / 1000;
+      if (closedDuration >= this._microsleepThreshold / 1000) {
+        state = 'Microsleep Detected';
+        evidenceParts.length = 0; // clear previous evidence
+        evidenceParts.push(`Eyes closed for ${closedDuration.toFixed(1)}s — possible microsleep`);
+      }
+    } else {
+      this._eyesClosedSince = null;
+    }
+
+    // ── Drowsiness Detection (overrides score-based state, but not microsleep) ──
+    this._eyeOpennessHistory.push({ avgOpen: avgEyeOpen, t: timestamp });
+    const drowsyCutoff = timestamp - (this._drowsinessSeconds * 1000);
+    this._eyeOpennessHistory = this._eyeOpennessHistory.filter(e => e.t > drowsyCutoff);
+
+    if (state !== 'Microsleep Detected' && this._eyeOpennessHistory.length > 0) {
+      const avgOpenRecent = this._eyeOpennessHistory.reduce((s, e) => s + e.avgOpen, 0)
+        / this._eyeOpennessHistory.length;
+      const windowSpan = (timestamp - this._eyeOpennessHistory[0].t) / 1000;
+
+      if (avgOpenRecent < this._drowsinessThreshold
+          && blinkRate > 25
+          && windowSpan >= this._drowsinessSeconds) {
+        state = 'Drowsy';
+        evidenceParts.push(`Drowsiness detected: avg eye openness ${avgOpenRecent.toFixed(2)}, blink rate ${blinkRate.toFixed(0)}/min`);
       }
     }
-    const smoothedState = Object.entries(this.stateCounters)
-      .sort((a, b) => b[1] - a[1])[0][0];
+
+    // ── Rolling-window state smoothing ──
+    this._stateWindow.push(state);
+    if (this._stateWindow.length > this._stateWindowSize) {
+      this._stateWindow.shift();
+    }
+    const smoothedState = this._getMostFrequent(this._stateWindow);
+
+    // ── Focus Streak Tracking ──
+    const isFocused = smoothedState === 'Deep Focus' || smoothedState === 'Focused';
+    if (isFocused) {
+      if (this._focusStreakStart === null) {
+        this._focusStreakStart = timestamp;
+      }
+      this._focusStreakSeconds = (timestamp - this._focusStreakStart) / 1000;
+    } else {
+      this._focusStreakStart = null;
+      this._focusStreakSeconds = 0;
+    }
 
     // Confidence
     let confidence = Math.min(92, Math.max(20, Math.round(score * 0.95)));
@@ -171,6 +231,7 @@ export class FocusAnalyzer {
       state: smoothedState,
       confidence: `${confidence}%`,
       evidence: evidenceParts.join('. ') + '.',
+      focusStreakSeconds: Math.round(this._focusStreakSeconds),
       _score: score,
       _blinkRate: blinkRate,
       _gazeVariance: gazeVariance,
@@ -194,10 +255,33 @@ export class FocusAnalyzer {
       state: 'Not reliably detectable',
       confidence: '0%',
       evidence: 'Insufficient facial landmark data for focus analysis.',
+      focusStreakSeconds: 0,
       _score: 0,
       _blinkRate: 0,
       _gazeVariance: 0,
       _headDrift: 0,
     };
+  }
+
+  /** Clear rolling state window (called when face is lost) */
+  _clearStateWindow() {
+    this._stateWindow = [];
+  }
+
+  /** Return the most frequent value in an array */
+  _getMostFrequent(arr) {
+    const counts = {};
+    for (const v of arr) {
+      counts[v] = (counts[v] || 0) + 1;
+    }
+    let best = arr[arr.length - 1]; // fallback to latest
+    let bestCount = 0;
+    for (const [val, count] of Object.entries(counts)) {
+      if (count > bestCount) {
+        bestCount = count;
+        best = val;
+      }
+    }
+    return best;
   }
 }

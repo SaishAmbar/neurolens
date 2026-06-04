@@ -94,6 +94,17 @@ export function extractFeatures(lm, handLabel) {
   const handWidth = maxX - minX;
   const handHeight = maxY - minY;
 
+  // New simplified properties for easy daily gestures
+  const isThumbsUp = thumbExt && !indexExt && !middleExt && !ringExt && !pinkyExt && lm[LM.THUMB_TIP].y < lm[LM.THUMB_IP].y;
+  const isThumbsDown = thumbExt && !indexExt && !middleExt && !ringExt && !pinkyExt && lm[LM.THUMB_TIP].y > lm[LM.THUMB_IP].y;
+  const isFist = !indexExt && !middleExt && !ringExt && !pinkyExt && !thumbExt;
+  const indexPointsAtScreen = (lm[LM.INDEX_TIP].z - lm[LM.INDEX_MCP].z) < -0.045 && !middleExt && !ringExt && !pinkyExt;
+
+  const oneFingerUp = indexExt && !middleExt && !ringExt && !pinkyExt && !thumbExt;
+  const twoFingersUp = indexExt && middleExt && !ringExt && !pinkyExt && !thumbExt;
+  const threeFingersUp = indexExt && middleExt && ringExt && !pinkyExt && !thumbExt;
+  const fourFingersUp = indexExt && middleExt && ringExt && pinkyExt && !thumbExt;
+
   return {
     isRight, fingers, extCount, curls,
     thumbExt, indexExt, middleExt, ringExt, pinkyExt,
@@ -105,6 +116,8 @@ export function extractFeatures(lm, handLabel) {
     handWidth, handHeight,
     wrist: { x: w.x, y: w.y, z: w.z || 0 },
     landmarks: lm,
+    isThumbsUp, isThumbsDown, isFist, indexPointsAtScreen,
+    oneFingerUp, twoFingersUp, threeFingersUp, fourFingersUp
   };
 }
 

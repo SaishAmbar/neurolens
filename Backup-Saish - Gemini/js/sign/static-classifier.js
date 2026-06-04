@@ -31,10 +31,10 @@ export class StaticGestureClassifier {
     { let s = 0, x = 8;
       if (f.indexExt) s += 2;
       if (!f.middleExt) s++; if (!f.ringExt) s++; if (!f.pinkyExt) s++;
-      if (f.extCount === 1 || (f.extCount === 2 && f.thumbExt)) s++;
-      // Pointing inward (toward body center — centroid.x near 0.5)
+      if (f.extCount === 1 || (f.extCount === 2 && f.thumbExt)) s += 2;
+      // Centroid in center / low chest
       if (f.centroid.x > 0.35 && f.centroid.x < 0.65) s++;
-      if (f.centroid.y > 0.3 && f.centroid.y < 0.7) s++;
+      if (f.centroid.y > 0.4 && f.centroid.y < 0.7) s++;
       add('I', s, x);
     }
 
@@ -43,9 +43,9 @@ export class StaticGestureClassifier {
       if (f.indexExt) s += 2;
       if (!f.middleExt) s++; if (!f.ringExt) s++; if (!f.pinkyExt) s++;
       if (f.extCount <= 2) s++;
-      // Pointing away from body (hand more to the side or forward)
-      if (!f.indexPointUp) s++;
-      if (!moving || spd < 0.03) s++;
+      // Pointing away from body (hand more to the front/side)
+      if (f.centroid.y > 0.35 && f.centroid.y < 0.65) s += 2;
+      if (moving && spd > 0.01 && spd < 0.06) s += 2;
       add('YOU', s, x);
     }
 
@@ -92,7 +92,7 @@ export class StaticGestureClassifier {
       if (!f.indexExt && !f.middleExt && !f.ringExt && !f.pinkyExt) s += 2;
       if (f.centroid.y > 0.3 && f.centroid.y < 0.65) s++;
       if (moving && spd > 0.01 && spd < 0.06) s += 2;
-      if (f.thumbOnSide || f.thumbTucked) s++;
+      if (pat !== 'wave') s++;
       add('SORRY', s, x);
     }
 
@@ -197,8 +197,6 @@ export class StaticGestureClassifier {
       if (!f.middleExt && !f.ringExt && !f.pinkyExt) s++;
       if (traj === 'down' || pat === 'nod') s += 2;
       if (f.extCount <= 2) s++;
-      if (moving) s++;
-      if (f.centroid.y > 0.3) s++;
       add('NEED', s, x);
     }
 
@@ -246,23 +244,21 @@ export class StaticGestureClassifier {
       if (!f.pinkyExt) s++;
       if (!f.thumbExt || f.thumbTucked) s++;
       if (f.centroid.y < 0.4) s += 2; // chin level
-      if (pat === 'nod' || (moving && spd < 0.04)) s++;
-      if (f.extCount === 3) s++;
-      if (f.centroid.x > 0.3 && f.centroid.x < 0.7) s++;
+      if (pat === 'nod' || (moving && spd < 0.04)) s += 2;
+      if (f.extCount >= 2 && f.extCount <= 4) s++;
       add('WATER', s, x);
     }
 
     // ═══ DESCRIPTORS ═══
 
     // GOOD — flat hand from chin forward
-    { let s = 0, x = 9;
+     {let s = 0, x = 9;
       if (f.extCount >= 3) s++;
       if (f.palmFacing) s++;
       if (f.centroid.y < 0.5) s += 2; // starts at chin
       if (traj === 'down' && spd > 0.01 && spd < 0.06) s += 2;
-      if (!moving || spd < 0.06) s++;
-      if (f.thumbExt) s++;
-      if (!f.thumbAcross) s++;
+      if (moving) s++;
+      if (f.indexExt && f.middleExt) s++;
       add('GOOD', s, x);
     }
 
@@ -272,8 +268,7 @@ export class StaticGestureClassifier {
       if (f.centroid.y < 0.5) s++;
       if (traj === 'down') s += 2;
       if (moving && spd > 0.02) s++;
-      if (!f.palmFacing) s++; // palm faces down after flip
-      if (f.thumbExt) s++;
+      if (!f.palmFacing) s++; // palm turns down/away
       if (f.indexExt && f.middleExt) s++;
       add('BAD', s, x);
     }
@@ -306,10 +301,9 @@ export class StaticGestureClassifier {
     { let s = 0, x = 8;
       if (f.extCount <= 1) s += 2;
       if (!f.indexExt && !f.middleExt && !f.ringExt && !f.pinkyExt) s += 2;
-      if (f.centroid.y > 0.35 && f.centroid.y < 0.65) s++; // chest
-      if (f.centroid.x > 0.3 && f.centroid.x < 0.7) s++;
-      if (!moving || spd < 0.02) s++;
-      if (f.thumbTucked || f.thumbOnSide) s++;
+      if (f.centroid.y > 0.35 && f.centroid.y < 0.65) s++; // chest level
+      if (moving && spd > 0.01 && spd < 0.06) s++;
+      if (f.isFist) s += 2;
       add('LOVE', s, x);
     }
 
@@ -366,8 +360,8 @@ export class StaticGestureClassifier {
       if (f.curls[1] > 60) s++;
       if (f.curls[2] > 60) s++;
       if (f.centroid.y > 0.3 && f.centroid.y < 0.6) s++;
-      if (!moving || spd < 0.03) s += 2;
-      if (f.extCount <= 2) s++;
+      if (moving && spd < 0.04) s++;
+      if (f.extCount <= 2) s += 2;
       add('MORE', s, x);
     }
 
@@ -429,8 +423,9 @@ export class StaticGestureClassifier {
     m.sort((a, b) => b.confidence - a.confidence);
   }
 
-  _boost(m, sign, amt) {
+  _boost(m, sign, amt) {    
     const x = m.find(i => i.sign === sign);
     if (x) x.confidence = Math.min(98, x.confidence + amt);
-  }
+  } 
 }
+

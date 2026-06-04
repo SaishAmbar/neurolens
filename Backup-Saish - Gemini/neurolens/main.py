@@ -42,6 +42,14 @@ def main():
     """Main entry point."""
     print_banner()
 
+    # Parse mode from command line arguments
+    mode = "navigation"
+    if len(sys.argv) > 1 and sys.argv[1].lower() in ["navigation", "desktop"]:
+        mode = sys.argv[1].lower()
+        print(f"[NeuroLens] Selected Mode: {mode.upper()}")
+    else:
+        print("[NeuroLens] Defaulting to NAVIGATION mode (run with 'desktop' for small items)")
+
     # ── Initialize Modules ────────────────────────────────────────────────
     print("[NeuroLens] Initializing modules...")
 
@@ -92,13 +100,13 @@ def main():
             fps_frame_count += 1
 
             # ── Detection ─────────────────────────────────────────────────
-            detections = detector.detect(frame)
+            detections = detector.detect(frame, mode=mode)
 
             # ── Distance Estimation ───────────────────────────────────────
             distance_results = distance_estimator.estimate_all(detections)
 
             # ── HUD Overlay ───────────────────────────────────────────────
-            frame = hud.render(frame, distance_results, fps)
+            frame = hud.render(frame, distance_results, fps, mode=mode)
 
             # ── FPS Calculation ───────────────────────────────────────────
             elapsed = time.time() - fps_start_time

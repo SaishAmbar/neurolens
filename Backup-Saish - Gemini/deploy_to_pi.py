@@ -7,11 +7,13 @@ import os
 # Force UTF-8 output
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
-PI_HOST = "10.221.228.112"
+PI_HOST = "10.165.194.112"
 PI_USER = "pi"
 PI_PASS = "pipipipi"
 LOCAL_FILE = r"c:\Users\ambar.SAISH-ZEPHYRUS\OneDrive\Desktop\Backup-Srijan - Gemini\Backup-Saish - Gemini\camera_stream.py"
 REMOTE_FILE = "/home/pi/camera_stream.py"
+LOCAL_OLED = r"c:\Users\ambar.SAISH-ZEPHYRUS\OneDrive\Desktop\Backup-Srijan - Gemini\Backup-Saish - Gemini\oled_server.py"
+REMOTE_OLED = "/home/pi/oled_server.py"
 
 def run_cmd(ssh, cmd, timeout=10):
     print(f"  > {cmd}")
@@ -34,26 +36,31 @@ ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=10)
 print("  [OK] Connected!")
 
 # Kill old process
-print("\n[2/4] Killing any old camera_stream process...")
+print("\n[2/4] Killing any old camera_stream and oled_server processes...")
 run_cmd(ssh, "pkill -f camera_stream.py || true")
+run_cmd(ssh, "pkill -f oled_server.py || true")
 run_cmd(ssh, "pkill -f 'python.*camera' || true")
+run_cmd(ssh, "fuser -k -9 5001/tcp || true")
+run_cmd(ssh, "fuser -k -9 5002/tcp || true")
 time.sleep(3)
 print("  [OK] Old processes killed, waiting for camera release...")
 
 # Upload file
-print(f"\n[3/4] Uploading camera_stream.py...")
+print(f"\n[3/4] Uploading camera_stream.py and oled_server.py...")
 sftp = ssh.open_sftp()
 sftp.put(LOCAL_FILE, REMOTE_FILE)
+sftp.put(LOCAL_OLED, REMOTE_OLED)
 sftp.close()
-print(f"  [OK] Uploaded to {REMOTE_FILE}")
+print(f"  [OK] Uploaded to {REMOTE_FILE} and {REMOTE_OLED}")
 
 # Run the new script
-print("\n[4/4] Starting camera_stream.py on Pi...")
+print("\n[4/4] Starting oled_server.py and camera_stream.py on Pi...")
 print("  (reading output for 20 seconds to confirm startup)\n")
 
 transport = ssh.get_transport()
 channel = transport.open_session()
-channel.exec_command(f"python3 {REMOTE_FILE} 2>&1")
+# Start OLED server in background, then start camera stream in foreground
+channel.exec_command(f"nohup python3 {REMOTE_OLED} > /dev/null 2>&1 & python3 {REMOTE_FILE} 2>&1")
 
 # Read output for 20 seconds to confirm startup
 start = time.time()
